@@ -24,6 +24,10 @@ Write-Host "Hazır: $kurulum"
 if ($Yayinla) {
     git push
     if ($LASTEXITCODE) { throw "git push başarısız" }
-    gh release create "v$surum" $kurulum --target (git rev-parse HEAD) --title "Polat PDF $surum" --notes "Polat PDF $surum"
+    foreach ($deneme in 1..3) {  # GitHub bağlantısı ara sıra kopuyor: birkaç kez dene
+        gh release create "v$surum" $kurulum --target (git rev-parse HEAD) --title "Polat PDF $surum" --notes "Polat PDF $surum"
+        if (-not $LASTEXITCODE) { break }
+        Start-Sleep 5
+    }
     if ($LASTEXITCODE) { throw "GitHub'a yüklenemedi" }
 }
