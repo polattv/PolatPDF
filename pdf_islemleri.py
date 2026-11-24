@@ -628,22 +628,32 @@ def powerpoint_e(doc, yol, dpi=150):
     """Her sayfayı bir slayda resim olarak koyar (PowerPoint kurulu olmalı). Görünüm birebir korunur."""
     import win32com.client
     ilk = doc[0].rect
+    # PowerPoint slayt kenarı 72–4032 punto (1–56 inç) olabilir: poster/küçük sayfa oranı korunarak sığdırılır
+    o = min(4032 / max(ilk.width, ilk.height), max(1, 72 / min(ilk.width, ilk.height)))
+    en, boy = ilk.width * o, ilk.height * o
+    try:
+        win32com.client.GetActiveObject("PowerPoint.Application")
+        zaten_acik = True
+    except Exception:
+        zaten_acik = False
     with tempfile.TemporaryDirectory() as k:
         ppt = win32com.client.Dispatch("PowerPoint.Application")  # PowerPoint tek örnekli çalışır
-        sunu = ppt.Presentations.Add(WithWindow=False)
+        sunu = None
         try:
-            sunu.PageSetup.SlideWidth, sunu.PageSetup.SlideHeight = ilk.width, ilk.height  # PDF de punto
+            sunu = ppt.Presentations.Add(WithWindow=False)
+            sunu.PageSetup.SlideWidth, sunu.PageSetup.SlideHeight = en, boy
             for i, s in enumerate(doc):
                 png = os.path.join(k, f"{i}.png")
                 s.get_pixmap(dpi=dpi, annots=True).save(png)
                 slayt = sunu.Slides.Add(i + 1, 12)  # ppLayoutBlank
-                r = oranli_kutu(pymupdf.Rect(0, 0, ilk.width, ilk.height), s.rect.width, s.rect.height)
+                r = oranli_kutu(pymupdf.Rect(0, 0, en, boy), s.rect.width, s.rect.height)
                 slayt.Shapes.AddPicture(png, False, True, r.x0, r.y0, r.width, r.height)
             sunu.SaveAs(os.path.abspath(yol), 24)  # ppSaveAsOpenXMLPresentation
         finally:
-            sunu.Close()
-            if ppt.Presentations.Count == 0:
-                ppt.Quit()  # kullanıcının açık sunusu varsa PowerPoint'i kapatma
+            if sunu is not None:
+                sunu.Close()
+            if not zaten_acik:
+                ppt.Quit()  # kullanıcının açık PowerPoint'ine dokunma
 
 
 def guvenli_kaydet(doc, yol):

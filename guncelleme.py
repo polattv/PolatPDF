@@ -1,12 +1,12 @@
 """GitHub'daki (polattv/PolatPDF) son sürümü (Release) denetler; yeniyse kurulum dosyasını indirip sessizce çalıştırır."""
-import json, os, subprocess, sys, tempfile, urllib.request
+import json, os, re, subprocess, sys, tempfile, urllib.request
 
 DEPO = "polattv/PolatPDF"
 SURUM_DOSYASI = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "surum.txt")
 
 
 def _sayi(s):
-    return tuple(int(p) for p in s.strip().lstrip("vV").split("."))
+    return tuple(int(p) for p in re.findall(r"\d+", s))  # "v1.2.0-beta" → (1, 2, 0)
 
 
 def _indir(url):
@@ -31,15 +31,22 @@ def son_surum():
 
 
 def yeni_var_mi():
-    """(yeni_mi, sürüm, url). İnternet yoksa hata fırlatır."""
+    """(yeni_mi, sürüm, url). url None ise sürüm var ama kurulum dosyası yüklenmemiş. İnternet yoksa hata fırlatır."""
     surum, url = son_surum()
-    return bool(url) and _sayi(surum) > _sayi(yerel_surum()), surum, url
+    return _sayi(surum) > _sayi(yerel_surum()), surum, url
+
+
+def acik_pencere_sayisi():
+    """Çalışan PolatPDF.exe sayısı (bu pencere dahil)."""
+    cikti = subprocess.run(["tasklist", "/FI", "IMAGENAME eq PolatPDF.exe", "/FO", "CSV", "/NH"], capture_output=True,
+                           text=True, creationflags=subprocess.CREATE_NO_WINDOW).stdout
+    return cikti.lower().count('"polatpdf.exe"')
 
 
 def kurulumu_baslat(url):
     """Kurulumu indirir ve arkada başlatır; çağıran hemen kapanmalı ki dosyalar kilitli kalmasın."""
-    yol = os.path.join(tempfile.gettempdir(), "PolatPDF-Kurulum.exe")
-    with open(yol, "wb") as f:
+    fd, yol = tempfile.mkstemp(prefix="PolatPDF-Kurulum-", suffix=".exe")  # eski kurulum kilitliyse çakışmasın
+    with os.fdopen(fd, "wb") as f:
         f.write(_indir(url))
     subprocess.Popen([yol, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], close_fds=True,
                      creationflags=subprocess.DETACHED_PROCESS)
@@ -47,4 +54,5 @@ def kurulumu_baslat(url):
 
 if __name__ == "__main__":
     assert _sayi("v1.10.0") > _sayi("1.9.3") and not _sayi("1.0") > _sayi("1.0")
+    assert _sayi("v1.1.0-beta") == (1, 1, 0) and isinstance(acik_pencere_sayisi(), int)
     print("yerel", yerel_surum())

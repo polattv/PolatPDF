@@ -4,6 +4,7 @@ param([switch]$Yayinla)
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 $surum = (Get-Content surum.txt -Raw).Trim()
+if ($Yayinla -and (git status --porcelain)) { throw "Kaydedilmemiş (commit edilmemiş) değişiklik var; önce commit edin" }
 
 python -c "import tema; tema.logo(256).save('polatpdf.ico', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])"
 if ($LASTEXITCODE) { throw "Simge yapılamadı" }
@@ -22,6 +23,7 @@ Write-Host "Hazır: $kurulum"
 
 if ($Yayinla) {
     git push
-    gh release create "v$surum" $kurulum --title "Polat PDF $surum" --notes "Polat PDF $surum"
+    if ($LASTEXITCODE) { throw "git push başarısız" }
+    gh release create "v$surum" $kurulum --target (git rev-parse HEAD) --title "Polat PDF $surum" --notes "Polat PDF $surum"
     if ($LASTEXITCODE) { throw "GitHub'a yüklenemedi" }
 }

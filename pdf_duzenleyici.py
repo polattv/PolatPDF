@@ -2,7 +2,7 @@
 
 Kullanım: pythonw pdf_duzenleyici.py [dosya.pdf]     |     python pdf_duzenleyici.py --test
 """
-import bisect, json, os, sys
+import bisect, json, os, sys, time
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 import pymupdf
@@ -105,8 +105,8 @@ class Uygulama:
         dosya.add_command(label="Birleştir…", command=self.birlestir_penceresi)
         dosya.add_command(label="Böl…", command=self.bol_penceresi)
         self.donustur_menu = tk.Menu(dosya, tearoff=0)
-        self.donustur_menu.add_command(label="Word'e (.docx)…", command=lambda: self.donustur("word"))
-        self.donustur_menu.add_command(label="PowerPoint'e (.pptx)…", command=lambda: self.donustur("powerpoint"))
+        self.donustur_menu.add_command(label="Word'e (.docx)…", command=lambda: self.disa_aktar("word"))
+        self.donustur_menu.add_command(label="PowerPoint'e (.pptx)…", command=lambda: self.disa_aktar("powerpoint"))
         dosya.add_cascade(label="Dönüştür", menu=self.donustur_menu)
         dosya.add_separator()
         dosya.add_command(label="Çıkış", command=self.kapat)
@@ -160,6 +160,7 @@ class Uygulama:
         dugme("sonraki", "", lambda: self.git(self.sayfa + 1))
         dugme("uzaklas", "", lambda: self.yakinlas(1 / 1.2))
         dugme("yakinlas", "", lambda: self.yakinlas(1.2))
+        dugme("tam_ekran", "", self.tam_ekran)
         bosluk()
         dugme("dondur", "Döndür", self.dondur)
         dugme("sil", "Sil", self.sil)
@@ -201,7 +202,17 @@ class Uygulama:
         yat.pack(side="bottom", fill="x")
         self.tuval.pack(fill="both", expand=True)
         govde.add(sag, stretch="always")
-        govde.add(self.panel_kur(govde), minsize=200, stretch="never")
+        panel = self.panel_kur(govde)
+        govde.add(panel, minsize=200, stretch="never")
+        # tam ekranda gizlenecekler: (bileşen, geri getirme)
+        self.tam = False
+        self.gizlenenler = [(ust, lambda: ust.pack(fill="x", before=govde)),
+                            (self.durum, lambda: self.durum.pack(fill="x", side="bottom", before=govde)),
+                            (dik, lambda: dik.pack(side="right", fill="y", before=yat)),  # köşe eskisi gibi kalsın
+                            (yat, lambda: yat.pack(side="bottom", fill="x", before=self.tuval)),
+                            (sol, lambda: govde.add(sol, before=sag, minsize=120)),
+                            (panel, lambda: govde.add(panel, after=sag, minsize=200, stretch="never"))]
+        self.menu, self.govde, self.tekerlek, self.son_gecis = menu, govde, 0, 0
 
         t, k = self.tuval, self.kucuk_tuval
         t.bind("<ButtonPress-1>", self.bas_)
@@ -210,21 +221,24 @@ class Uygulama:
         t.bind("<Motion>", self.uzerinde)
         t.bind("<Double-Button-1>", self.duzenle_cift)
         t.bind("<Configure>", self.ortala)  # pencere büyüyünce / tam ekranda yeniden ortala
-        t.bind("<MouseWheel>", lambda e: t.yview_scroll(-e.delta // 120, "units"))
+        t.bind("<MouseWheel>", self.tekerlek_)
         t.bind("<Control-MouseWheel>", lambda e: self.yakinlas(1.1 if e.delta > 0 else 1 / 1.1))
-        k.bind("<MouseWheel>", lambda e: k.yview_scroll(-e.delta // 120, "units"))
+        k.bind("<MouseWheel>", lambda e: k.yview_scroll(-1 if e.delta > 0 else 1, "units"))
         k.bind("<ButtonPress-1>", self.kucuk_bas)
         k.bind("<B1-Motion>", self.kucuk_surukle_)
         k.bind("<ButtonRelease-1>", self.kucuk_birak)
         for tus, f in {"<Next>": lambda e: self.git(self.sayfa + 1), "<Prior>": lambda e: self.git(self.sayfa - 1),
                        "<Control-o>": lambda e: self.ac(), "<Control-s>": lambda e: self.farkli_kaydet(),
                        "<Control-z>": lambda e: self.geri_al(), "<Control-y>": lambda e: self.ileri_al(),
-                       "<Control-f>": lambda e: self.arama_kutusu.focus_set(), "<F3>": lambda e: self.bul(1),
+                       "<Control-f>": lambda e: (self.tam and self.tam_ekran(), self.arama_kutusu.focus_set()),
+                       "<F3>": lambda e: self.bul(1),
                        "<Control-plus>": lambda e: self.yakinlas(1.2), "<Control-minus>": lambda e: self.yakinlas(1 / 1.2),
                        "<Delete>": lambda e: self.secilileri_sil(), "<Return>": lambda e: self.enter_tusu(),
                        "<Left>": lambda e: self.ok_tusu(-1, 0, e), "<Right>": lambda e: self.ok_tusu(1, 0, e),
                        "<Up>": lambda e: self.ok_tusu(0, -1, e), "<Down>": lambda e: self.ok_tusu(0, 1, e),
-                       "<Escape>": lambda e: self.secimi_birak() if self.secili else self.mod and self.mod_sec(self.mod)
+                       "<F11>": lambda e: self.tam_ekran(),
+                       "<Escape>": lambda e: self.tam_ekran() if self.tam else
+                       self.secimi_birak() if self.secili else self.mod and self.mod_sec(self.mod)
                        }.items():
             p.bind(tus, f)
         p.protocol("WM_DELETE_WINDOW", self.kapat)
@@ -570,12 +584,18 @@ class Uygulama:
         self.pen.update()
         try:
             yeni, uzak, url = guncelleme.yeni_var_mi()
+            self.bilgi("")
             if not yeni:
-                self.bilgi("")
                 return messagebox.showinfo("Güncelle", f"Polat PDF güncel (sürüm {guncelleme.yerel_surum()}).")
+            if not url:
+                return messagebox.showinfo("Güncelle", f"Sürüm {uzak} yayımlanmış ama kurulum dosyası henüz "
+                                           "yüklenmemiş. Biraz sonra yeniden deneyin.")
             if not getattr(sys, "frozen", False):
                 return messagebox.showinfo("Güncelle", f"Yeni sürüm var: {uzak}. Kaynak koddan çalışıyorsunuz; "
                                            "kurulu Polat PDF'i güncelleyin ya da git pull yapın.")
+            if guncelleme.acik_pencere_sayisi() > 1:  # kurulum diğer pencereleri zorla kapatır, kaydedilmemiş iş gider
+                return messagebox.showwarning("Güncelle", "Başka Polat PDF pencereleri açık. Önce onları kaydedip "
+                                              "kapatın, sonra yeniden Güncelle'ye basın.")
             if not (messagebox.askyesno("Güncelle", f"Yeni sürüm var: {uzak}\n(şu an {guncelleme.yerel_surum()})\n\n"
                                         "Kurulsun mu? Polat PDF kapanıp yeniden açılacak.") and self.kaydedilsin_mi()):
                 return self.bilgi("")
@@ -594,6 +614,50 @@ class Uygulama:
             self.pen.destroy()
 
     # ---------- gezinme, arama ----------
+    def tam_ekran(self):
+        """F11 / Esc: menü, araç çubuğu, yan paneller ve kaydırma çubukları gizlenir; yalnızca sayfa kalır."""
+        self.tam = not self.tam
+        if self.tam:  # kullanıcının ayarladığı yan panel genişlikleri
+            self.genislikler = {w: w.winfo_width() for w, _ in self.gizlenenler if w.winfo_manager() == "panedwindow"}
+        self.pen.attributes("-fullscreen", self.tam)
+        self.pen.config(menu="" if self.tam else self.menu)
+        for w, geri in (self.gizlenenler if self.tam else reversed(self.gizlenenler)):
+            if not self.tam:
+                geri()
+            elif w.winfo_manager() == "panedwindow":
+                w.master.forget(w)
+            else:
+                w.pack_forget()
+        if not self.tam:
+            for w, en in self.genislikler.items():
+                self.govde.paneconfigure(w, width=en)
+        self.tuval.focus_set()
+
+    def tekerlek_(self, e):
+        """Touchpad küçük adımlar gönderir: 120'ye (bir tık) ulaşana kadar biriktir."""
+        self.tekerlek += e.delta
+        n = int(self.tekerlek / 120)
+        if n:
+            self.tekerlek -= n * 120
+            self.kaydir(-n)
+
+    def kaydir(self, adim):
+        """Aşağı/yukarı kaydırır; sayfanın sonuna (başına) gelince sonraki (önceki) sayfaya geçer."""
+        if not self.doc:
+            return
+        t = self.tuval
+        ust, alt = t.yview()
+        sinirda = (adim > 0 and alt >= 1 and self.sayfa < self.doc.page_count - 1) or \
+                  (adim < 0 and ust <= 0 and self.sayfa > 0)
+        if sinirda:
+            if time.monotonic() - self.son_gecis < 0.3:  # hızlı kaydırmada sayfalar art arda atlanmasın
+                return
+            self.son_gecis = time.monotonic()
+            self.git(self.sayfa + (1 if adim > 0 else -1))
+            t.yview_moveto(0 if adim > 0 else 1)
+        else:
+            t.yview_scroll(adim, "units")
+
     def git(self, n):
         if self.belge_var():
             if n != self.sayfa:
@@ -668,7 +732,7 @@ class Uygulama:
         w.resizable(False, False)
         return w
 
-    def donustur(self, tur):
+    def disa_aktar(self, tur):
         """Açık belgeyi (kaydedilmemiş değişiklikleriyle) Word ya da PowerPoint dosyasına çevirir."""
         if not self.belge_var():
             return
@@ -947,8 +1011,10 @@ class Uygulama:
         return dx, dy
 
     def ok_tusu(self, dx, dy, e):
-        if self.mod != "duzenle" or not self.secim_var() or self.odak_yazida():
+        if self.odak_yazida():
             return
+        if self.mod != "duzenle" or not self.secim_var():  # seçili satır yoksa oklar sayfada gezinir
+            return self.kaydir(dy) if dy else self.git(self.sayfa + dx) if self.doc else None
         adim = 10 if e.state & 1 else 1  # Shift ile 10
         cx, cy = self.sayfa_icinde(self.secim_kutusu(), dx * adim * self.zoom, dy * adim * self.zoom)
         if not (cx or cy):

@@ -27,7 +27,7 @@ WizardStyle=modern
 Name: "tr"; MessagesFile: "compiler:Languages\Turkish.isl"
 
 [Tasks]
-Name: "masaustu"; Description: "Masaüstüne kısayol koy"
+Name: "masaustu"; Description: "Masaüstüne kısayol oluştur"
 
 [Files]
 Source: "dist\PolatPDF\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
