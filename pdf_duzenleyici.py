@@ -154,9 +154,8 @@ class Uygulama:
         tk.Label(ust, image=self.marka, bg=tema.ZEMIN).pack(side="left")
         tk.Label(ust, text=" " + tema.AD, font=("Segoe UI Semibold", 13), fg=tema.YAZI, bg=tema.ZEMIN).pack(side="left")
         bosluk(18)
-        dugme("ac", "Aç", self.ac)
-        dugme("kaydet", "Farklı kaydet", self.farkli_kaydet)
-        dugme("yazdir", "Yazdır", self.yazdir_penceresi)
+        sol_ok = dugme("sol_kapat", "", lambda: self.sutun_ac_kapa(sol, sol_ok, "sol_kapat", "sol_ac"))
+        bosluk()
         dugme("geri", "", self.geri_al)
         dugme("ileri", "", self.ileri_al)
         bosluk()
@@ -167,15 +166,10 @@ class Uygulama:
         dugme("yakinlas", "", lambda: self.yakinlas(1.2))
         dugme("tam_ekran", "", self.tam_ekran)
         bosluk()
-        dugme("dondur", "Döndür", self.dondur)
-        dugme("sil", "Sil", self.sil)
-        dugme("pdf_ekle", "PDF ekle", self.birlestir)
-        dugme("bol", "Böl", self.bol_penceresi)
-        dugme("birlestir", "Birleştir", self.birlestir_penceresi)
-        d = dugme("donustur", "Dönüştür", None)
-        d.config(command=lambda: self.donustur_menu.tk_popup(d.winfo_rootx(), d.winfo_rooty() + d.winfo_height()))
         dugme("guncelle", "Güncelle", self.guncelle)
         bosluk()
+        sag_ok = dugme("sag_kapat", "", lambda: self.sutun_ac_kapa(panel, sag_ok, "sag_kapat", "sag_ac"))
+        sag_ok.pack(side="right")
         arama = tk.Frame(ust, bg=tema.YUZEY2, padx=6)
         arama.pack(side="left", fill="y", padx=2)
         tk.Label(arama, image=tema.simge("ara", 16) or "", text="" if tema.simge("ara") else "Ara", bg=tema.YUZEY2
@@ -218,6 +212,7 @@ class Uygulama:
                             (sol, lambda: govde.add(sol, before=sag, minsize=120)),
                             (panel, lambda: govde.add(panel, after=sag, minsize=200, stretch="never"))]
         self.menu, self.govde, self.tekerlek, self.son_gecis = menu, govde, 0, 0
+        self.kapali_sutunlar, self.sutun_genisligi = set(), {}
 
         t, k = self.tuval, self.kucuk_tuval
         t.bind("<ButtonPress-1>", self.bas_)
@@ -274,8 +269,12 @@ class Uygulama:
             for c in range(sutun):
                 g.columnconfigure(c, weight=1, uniform="sutun")
 
-        grup("Yazıyı düzenle", [("duzenle", "duzenle", "Yazıyı düzenle"), ("yazi", "yazi", "Yazı ekle"),
-                                ("degistir", "degistir", "Beyazla + yaz")], 1)
+        donustur = lambda: self.donustur_menu.tk_popup(self.pen.winfo_pointerx(), self.pen.winfo_pointery())
+        grup("PDF düzenle", [("duzenle", "duzenle", "Yazıyı düzenle"), ("yazi", "yazi", "Yazı ekle"),
+                             ("degistir", "degistir", "Beyazla + yaz"), (self.birlestir, "pdf_ekle", "PDF ekle"),
+                             (self.bol_penceresi, "bol", "Böl"), (self.birlestir_penceresi, "birlestir", "Birleştir"),
+                             (donustur, "donustur", "Dönüştür"), (self.dondur, "dondur", "Sayfayı döndür"),
+                             (self.sil, "sil", "Sayfayı sil")])
         grup("Yorum ve işaret", [("sec", "sec", "Seç"), ("not", "not", "Not"), ("vurgu", "vurgu", "Vurgula"),
                                  ("alti", "alti", "Altını çiz"), ("ustu", "ustu", "Üstünü çiz"),
                                  ("kalem", "kalem", "Kalem"), ("dikdortgen", "dikdortgen", "Dikdörtgen"),
@@ -630,7 +629,8 @@ class Uygulama:
         self.pen.config(menu="" if self.tam else self.menu)
         for w, geri in (self.gizlenenler if self.tam else reversed(self.gizlenenler)):
             if not self.tam:
-                geri()
+                if w not in self.kapali_sutunlar:  # kullanıcının oklarla gizlediği sütun gizli kalsın
+                    geri()
             elif w.winfo_manager() == "panedwindow":
                 w.master.forget(w)
             else:
@@ -639,6 +639,18 @@ class Uygulama:
             for w, en in self.genislikler.items():
                 self.govde.paneconfigure(w, width=en)
         self.tuval.focus_set()
+
+    def sutun_ac_kapa(self, w, dugme, gizle_simgesi, goster_simgesi):
+        """Sol (küçük resimler) ya da sağ (araçlar) sütunu gizler / geri getirir; ok düğmesinin yönü de döner."""
+        if w in self.kapali_sutunlar:
+            self.kapali_sutunlar.discard(w)
+            dict(self.gizlenenler)[w]()
+            self.govde.paneconfigure(w, width=self.sutun_genisligi.get(w, w.winfo_reqwidth()))
+        else:
+            self.sutun_genisligi[w] = w.winfo_width()
+            self.govde.forget(w)
+            self.kapali_sutunlar.add(w)
+        dugme.config(image=tema.simge(goster_simgesi if w in self.kapali_sutunlar else gizle_simgesi) or "")
 
     def tekerlek_(self, e):
         """Touchpad küçük adımlar gönderir: 120'ye (bir tık) ulaşana kadar biriktir."""
