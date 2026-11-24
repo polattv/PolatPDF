@@ -2284,24 +2284,44 @@ class Uygulama:
         w = self.pencere("Arka planı temizle")
         onizleme = im.copy()
         onizleme.thumbnail((420, 300))
-        tk.Label(w, text="Düz renkli arka plan (beyaz kağıt, duvar, masa) şeffaf yapılır.", fg=tema.YAZI2
-                 ).pack(anchor="w")
+        tk.Label(w, text="Kâğıt / zemin şeffaf yapılır. Kaşe ve imza için “Kaşe / imza” yöntemi gölgeyi ve "
+                         "dengesiz ışığı da siler.", fg=tema.YAZI2, wraplength=420, justify="left").pack(anchor="w")
         resim_etiketi = tk.Label(w, bg=tema.ZEMIN)
         resim_etiketi.pack(pady=8)
-        tolerans = tk.IntVar(value=40)
+        tolerans = tk.IntVar(value=50)
         kenardan = tk.BooleanVar(value=True)
         temizle = tk.BooleanVar(value=not ilk_ekleme)
+        yontem = tk.StringVar(value="murekkep")
         ayar = tk.Frame(w)
         ayar.pack(fill="x")
         tk.Checkbutton(ayar, text="Arka planı temizle", variable=temizle, selectcolor=tema.YUZEY2,
                        command=lambda: guncelle()).grid(row=0, column=0, columnspan=2, sticky="w")
-        tk.Label(ayar, text="Hassasiyet", fg=tema.YAZI2).grid(row=1, column=0, sticky="w")
-        tk.Scale(ayar, from_=5, to=150, orient="horizontal", variable=tolerans, length=260, showvalue=False,
+        yf = tk.Frame(ayar)
+        yf.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 4))
+        for deger, yazi in (("murekkep", "Kaşe / imza (kâğıt üstünde mürekkep)"), ("duz", "Düz renk (logo, fotoğraf)")):
+            tk.Radiobutton(yf, text=yazi, variable=yontem, value=deger, selectcolor=tema.YUZEY2,
+                           command=lambda: (kenar_kutusu.grid() if yontem.get() == "duz" else kenar_kutusu.grid_remove(),
+                                            guncelle())).pack(side="left", padx=(0, 10))
+        tk.Label(ayar, text="Hassasiyet", fg=tema.YAZI2).grid(row=2, column=0, sticky="w")
+        tk.Scale(ayar, from_=0, to=100, orient="horizontal", variable=tolerans, length=260, showvalue=False,
                  troughcolor=tema.YUZEY2, sliderrelief="flat", bg=tema.VURGU, activebackground=tema.VURGU_ACIK,
-                 bd=0, sliderlength=18, command=lambda _: geciktir()).grid(row=1, column=1)
-        tk.Checkbutton(ayar, text="Sadece kenara bağlı zemin (fotoğraf için; kapalıysa imzanın harf içleri de "
-                                  "temizlenir)", variable=kenardan, selectcolor=tema.YUZEY2, wraplength=380,
-                       justify="left", command=lambda: guncelle()).grid(row=2, column=0, columnspan=2, sticky="w")
+                 bd=0, sliderlength=18, command=lambda _: geciktir()).grid(row=2, column=1)
+        tk.Label(ayar, text="(sağa: soluk mürekkep de kalır / daha çok zemin silinir)", fg=tema.YAZI2
+                 ).grid(row=3, column=1, sticky="w")
+        kenar_kutusu = tk.Checkbutton(ayar, text="Sadece kenara bağlı zemin (fotoğraf için; kapalıysa harf içleri "
+                                                 "de temizlenir)", variable=kenardan, selectcolor=tema.YUZEY2,
+                                      wraplength=380, justify="left", command=lambda: guncelle())
+        kenar_kutusu.grid(row=4, column=0, columnspan=2, sticky="w")
+        kenar_kutusu.grid_remove()
+
+        def uygula_(resim):
+            if not temizle.get():
+                return resim
+            if yontem.get() == "murekkep":
+                return pi.murekkep_ayir(resim, tolerans.get())
+            t = tolerans.get()  # eski 5-150 ölçeği; orta (50) eski varsayılan 40'a denk gelsin
+            return pi.arka_plani_temizle(resim, 5 + t * 0.7 if t <= 50 else 40 + (t - 50) * 2.2, kenardan.get())
+
         bekleyen = [None]
 
         def dama(boyut):  # şeffaf yerleri göstermek için damalı zemin
@@ -2316,7 +2336,7 @@ class Uygulama:
 
         def guncelle():
             bekleyen[0] = None
-            g = pi.arka_plani_temizle(onizleme, tolerans.get(), kenardan.get()) if temizle.get() else onizleme
+            g = uygula_(onizleme)
             resim_etiketi.img = ImageTk.PhotoImage(Image.alpha_composite(zemin, g))
             resim_etiketi.config(image=resim_etiketi.img)
 
@@ -2329,7 +2349,7 @@ class Uygulama:
 
         def bitir(kullan):
             if kullan:
-                sonuc[0] = pi.arka_plani_temizle(im, tolerans.get(), kenardan.get()) if temizle.get() else im
+                sonuc[0] = uygula_(im)
             w.destroy()
 
         alt = tk.Frame(w, pady=10)

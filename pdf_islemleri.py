@@ -364,6 +364,38 @@ def arka_plani_temizle(im, tolerans=40, kenardan=True):
     return im
 
 
+def murekkep_ayir(im, hassasiyet=50):
+    """Kaşe / imza fotoğrafından mürekkebi ayırır: kâğıt şeffaf olur, mürekkep kendi rengiyle kalır.
+    Düz renk silmekten farkı: kâğıdın rengi her bölgede ayrı tahmin edilir (gölge, dengesiz ışık, kâğıt sarılığı
+    silinir), mürekkep koyuluğuna göre yumuşak geçişle ayrılır (kenar tırtıklı olmaz) ve kenarlardaki beyaz
+    karışım geri çıkarılır (beyaz hale kalmaz). hassasiyet 0-100: büyüdükçe soluk mürekkep de korunur."""
+    import numpy as np
+    from PIL import Image, ImageFilter
+    rgb = im.convert("RGB")
+    w, h = rgb.size
+    # 1) kâğıdın yerel rengi: küçük kopyada mürekkebi "aydınlık en büyük" ile sil, yumuşat, büyüt
+    o = min(1, 400 / max(w, h))
+    kucuk = rgb.resize((max(1, int(w * o)), max(1, int(h * o))), Image.BILINEAR)
+    # pencere: kaşe çizgisinden kalın (çizgi zemin sanılmasın), gölge geçişinden ince (köşede gölge kalmasın)
+    k = max(3, int(min(kucuk.size) / 25) | 1)
+    zemin = kucuk.filter(ImageFilter.MaxFilter(k)).filter(ImageFilter.GaussianBlur(k / 2)).resize((w, h), Image.BILINEAR)
+    a = np.asarray(rgb, dtype=np.float32) / 255
+    z = np.maximum(np.asarray(zemin, dtype=np.float32) / 255, 0.08)
+    # 2) kâğıda göre düzeltilmiş görüntü (kâğıt = 1) ve mürekkep koyuluğu (en koyu kanal: mavi mürekkepte kırmızı)
+    duz = np.clip(a / z, 0, 1)
+    koyu = 1 - duz.min(axis=2)
+    esik = 0.22 - hassasiyet / 100 * 0.19  # 0 → 0.22 (yalnız koyu mürekkep), 100 → 0.03 (soluk da)
+    t = np.clip((koyu - esik) / 0.2, 0, 1)
+    alfa = t * t * (3 - 2 * t)  # yumuşak geçiş: kenar tırtıklı olmasın
+    # 3) beyaz haleyi çıkar: renk = kâğıtla karışmamış mürekkep rengi
+    renk = np.clip(1 - (1 - duz) / np.maximum(alfa, 1 / 255)[..., None], 0, 1)
+    sonuc = Image.fromarray(np.dstack([renk * 255, alfa * 255]).round().astype(np.uint8), "RGBA")
+    # 4) toz / leke: tek tük pikseller gitsin — yalnız büyük resimde (küçükte ince harfleri aşındırır)
+    if max(w, h) > 1000:
+        sonuc.putalpha(sonuc.getchannel("A").filter(ImageFilter.MedianFilter(3)))
+    return sonuc
+
+
 def vurgula(page, rect):
     return isaretle(page, rect, "vurgu")
 
@@ -1460,6 +1492,15 @@ def test():
         assert e.page_count == 3
         assert ust_alt_bilgi(e, filigran="KOPYADIR", numara="{n}/{N}") == 3 and "1/3" in e[0].get_text()
         assert [hucre_degeri(x) for x in ("9.200,00", "5581631660", "30")] == [9200.0, "5581631660", 30]
+        # kaşe: gölgeli kâğıt şeffaf, mavi mürekkep kalır
+        from PIL import Image as _I, ImageDraw as _D
+        foto = _I.new("RGB", (400, 300))
+        for x in range(400):  # soldan sağa koyulaşan gölge
+            _D.Draw(foto).line([(x, 0), (x, 299)], fill=(int(240 - x * 0.3),) * 3)
+        _D.Draw(foto).ellipse((120, 70, 280, 230), outline=(40, 60, 160), width=8)
+        a = murekkep_ayir(foto).getchannel("A")
+        assert a.getpixel((10, 10)) < 20 and a.getpixel((390, 290)) < 20, "gölge silinmedi"
+        assert a.getpixel((124, 150)) > 200, "kaşe çizgisi kayboldu"
     finally:
         shutil.rmtree(k, ignore_errors=True)
     print("Tüm testler geçti.")
