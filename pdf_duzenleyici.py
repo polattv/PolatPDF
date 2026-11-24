@@ -2,7 +2,7 @@
 
 Kullanım: pythonw pdf_duzenleyici.py [dosya.pdf]     |     python pdf_duzenleyici.py --test
 """
-import bisect, json, os, subprocess, sys
+import bisect, json, os, sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 import pymupdf
@@ -564,29 +564,30 @@ class Uygulama:
         return self.kaydet_yola(yol) if yol else False
 
     def guncelle(self):
-        """GitHub'da yeni sürüm varsa indirir ve uygulamayı yeniden başlatmayı önerir."""
+        """GitHub'da yeni sürüm varsa kurulumunu indirir, uygulamayı kapatır; kurulum bitince uygulama yeniden açılır."""
         self.bilgi("Güncelleme denetleniyor…")
         self.pen.config(cursor="watch")
         self.pen.update()
         try:
-            yeni, uzak = guncelleme.yeni_var_mi()
+            yeni, uzak, url = guncelleme.yeni_var_mi()
             if not yeni:
                 self.bilgi("")
                 return messagebox.showinfo("Güncelle", f"Polat PDF güncel (sürüm {guncelleme.yerel_surum()}).")
-            if not messagebox.askyesno("Güncelle", f"Yeni sürüm var: {uzak}\n(şu an {guncelleme.yerel_surum()})\n\n"
-                                       "İndirilsin mi?"):
+            if not getattr(sys, "frozen", False):
+                return messagebox.showinfo("Güncelle", f"Yeni sürüm var: {uzak}. Kaynak koddan çalışıyorsunuz; "
+                                           "kurulu Polat PDF'i güncelleyin ya da git pull yapın.")
+            if not (messagebox.askyesno("Güncelle", f"Yeni sürüm var: {uzak}\n(şu an {guncelleme.yerel_surum()})\n\n"
+                                        "Kurulsun mu? Polat PDF kapanıp yeniden açılacak.") and self.kaydedilsin_mi()):
                 return self.bilgi("")
-            guncelleme.guncelle()
+            self.bilgi("Güncelleme indiriliyor…")
+            self.pen.update()
+            guncelleme.kurulumu_baslat(url)
         except Exception as e:
             self.bilgi("Güncellenemedi.")
             return messagebox.showerror("Güncellenemedi", f"İnternet bağlantısını denetleyin.\n\n{e}")
         finally:
             self.pen.config(cursor="")
-        self.bilgi(f"Sürüm {uzak} indirildi.")
-        if messagebox.askyesno("Güncellendi", f"Sürüm {uzak} indirildi.\n\nUygulama yeniden başlatılsın mı?") \
-                and self.kaydedilsin_mi():
-            subprocess.Popen([sys.executable, os.path.abspath(__file__)] + ([self.yol] if self.yol else []))
-            self.pen.destroy()
+        self.pen.destroy()  # kurulum dosyaları değiştirebilsin
 
     def kapat(self):
         if self.kaydedilsin_mi():

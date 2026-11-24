@@ -1,17 +1,17 @@
-"""GitHub'daki (polattv/PolatPDF) son sürümü denetler ve uygulama dosyalarını onunla değiştirir."""
-import io, os, tempfile, urllib.request, zipfile
+"""GitHub'daki (polattv/PolatPDF) son sürümü (Release) denetler; yeniyse kurulum dosyasını indirip sessizce çalıştırır."""
+import json, os, subprocess, sys, tempfile, urllib.request
 
 DEPO = "polattv/PolatPDF"
-KLASOR = os.path.dirname(os.path.abspath(__file__))
-SURUM_DOSYASI = os.path.join(KLASOR, "surum.txt")
+SURUM_DOSYASI = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "surum.txt")
 
 
 def _sayi(s):
-    return tuple(int(p) for p in s.strip().split("."))
+    return tuple(int(p) for p in s.strip().lstrip("vV").split("."))
 
 
 def _indir(url):
-    with urllib.request.urlopen(url, timeout=20) as y:
+    istek = urllib.request.Request(url, headers={"User-Agent": "PolatPDF"})  # GitHub API User-Agent ister
+    with urllib.request.urlopen(istek, timeout=30) as y:
         return y.read()
 
 
@@ -23,34 +23,28 @@ def yerel_surum():
         return "0"
 
 
-def uzak_surum():
-    return _indir(f"https://raw.githubusercontent.com/{DEPO}/main/surum.txt").decode("utf-8").strip()
+def son_surum():
+    """(sürüm, kurulum_url) — sürüm ve dosya aynı Release'ten gelir, biri yüklenmeden diğeri görünmez."""
+    r = json.loads(_indir(f"https://api.github.com/repos/{DEPO}/releases/latest"))
+    url = next((a["browser_download_url"] for a in r.get("assets", []) if a["name"].lower().endswith(".exe")), None)
+    return r["tag_name"].lstrip("vV"), url
 
 
 def yeni_var_mi():
-    """(yeni_mi, uzak_surum). İnternet yoksa hata fırlatır."""
-    uzak = uzak_surum()
-    return _sayi(uzak) > _sayi(yerel_surum()), uzak
+    """(yeni_mi, sürüm, url). İnternet yoksa hata fırlatır."""
+    surum, url = son_surum()
+    return bool(url) and _sayi(surum) > _sayi(yerel_surum()), surum, url
 
 
-def guncelle():
-    """Depodaki dosyaları indirip uygulama klasörüne koyar. Güncellenen dosya adlarını döner."""
-    veri = _indir(f"https://github.com/{DEPO}/archive/refs/heads/main.zip")
-    yazilanlar = []
-    with zipfile.ZipFile(io.BytesIO(veri)) as z:
-        for ad in z.namelist():
-            parca = ad.split("/")
-            if len(parca) != 2 or not parca[1]:  # yalnızca kök klasördeki dosyalar; alt klasör/yol oyunu yok
-                continue
-            hedef = os.path.join(KLASOR, parca[1])
-            fd, gecici = tempfile.mkstemp(dir=KLASOR)
-            with os.fdopen(fd, "wb") as f:
-                f.write(z.read(ad))
-            os.replace(gecici, hedef)  # yarıda kesilirse eski dosya bozulmadan kalır
-            yazilanlar.append(parca[1])
-    return yazilanlar
+def kurulumu_baslat(url):
+    """Kurulumu indirir ve arkada başlatır; çağıran hemen kapanmalı ki dosyalar kilitli kalmasın."""
+    yol = os.path.join(tempfile.gettempdir(), "PolatPDF-Kurulum.exe")
+    with open(yol, "wb") as f:
+        f.write(_indir(url))
+    subprocess.Popen([yol, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], close_fds=True,
+                     creationflags=subprocess.DETACHED_PROCESS)
 
 
 if __name__ == "__main__":
-    assert _sayi("1.10.0") > _sayi("1.9.3") and not _sayi("1.0") > _sayi("1.0")
+    assert _sayi("v1.10.0") > _sayi("1.9.3") and not _sayi("1.0") > _sayi("1.0")
     print("yerel", yerel_surum())
