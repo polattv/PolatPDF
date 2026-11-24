@@ -101,6 +101,7 @@ class Uygulama:
         dosya.add_separator()
         dosya.add_command(label="Kaydet (üstüne)", command=self.kaydet)
         dosya.add_command(label="Farklı kaydet…", accelerator="Ctrl+S", command=self.farkli_kaydet)
+        dosya.add_command(label="Yazdır…", accelerator="Ctrl+P", command=self.yazdir_penceresi)
         dosya.add_separator()
         dosya.add_command(label="Birleştir…", command=self.birlestir_penceresi)
         dosya.add_command(label="Böl…", command=self.bol_penceresi)
@@ -114,6 +115,9 @@ class Uygulama:
         duzen = tk.Menu(menu, tearoff=0)
         duzen.add_command(label="Geri al", accelerator="Ctrl+Z", command=self.geri_al)
         duzen.add_command(label="İleri al", accelerator="Ctrl+Y", command=self.ileri_al)
+        duzen.add_separator()
+        duzen.add_command(label="Kopyala", accelerator="Ctrl+C", command=self.kopyala)
+        duzen.add_command(label="Yapıştır", accelerator="Ctrl+V", command=self.yapistir)
         duzen.add_separator()
         duzen.add_command(label="Bul", accelerator="Ctrl+F", command=lambda: self.arama_kutusu.focus_set())
         duzen.add_command(label="Sonrakini bul", accelerator="F3", command=lambda: self.bul(1))
@@ -152,6 +156,7 @@ class Uygulama:
         bosluk(18)
         dugme("ac", "Aç", self.ac)
         dugme("kaydet", "Farklı kaydet", self.farkli_kaydet)
+        dugme("yazdir", "Yazdır", self.yazdir_penceresi)
         dugme("geri", "", self.geri_al)
         dugme("ileri", "", self.ileri_al)
         bosluk()
@@ -194,7 +199,7 @@ class Uygulama:
         govde.add(sol, minsize=120)
         # sağ: sayfa
         sag = tk.Frame(govde)
-        self.tuval = tk.Canvas(sag, bg=tema.ZEMIN, highlightthickness=0)
+        self.tuval = tk.Canvas(sag, bg=tema.ZEMIN, highlightthickness=0, cursor="xterm")
         dik = tk.Scrollbar(sag, orient="vertical", command=self.tuval.yview)
         yat = tk.Scrollbar(sag, orient="horizontal", command=self.tuval.xview)
         self.tuval.configure(yscrollcommand=dik.set, xscrollcommand=yat.set)
@@ -230,6 +235,8 @@ class Uygulama:
         for tus, f in {"<Next>": lambda e: self.git(self.sayfa + 1), "<Prior>": lambda e: self.git(self.sayfa - 1),
                        "<Control-o>": lambda e: self.ac(), "<Control-s>": lambda e: self.farkli_kaydet(),
                        "<Control-z>": lambda e: self.geri_al(), "<Control-y>": lambda e: self.ileri_al(),
+                       "<Control-c>": lambda e: self.kopyala(), "<Control-v>": lambda e: self.yapistir(),
+                       "<Control-p>": lambda e: self.yazdir_penceresi(),
                        "<Control-f>": lambda e: (self.tam and self.tam_ekran(), self.arama_kutusu.focus_set()),
                        "<F3>": lambda e: self.bul(1),
                        "<Control-plus>": lambda e: self.yakinlas(1.2), "<Control-minus>": lambda e: self.yakinlas(1 / 1.2),
@@ -661,7 +668,7 @@ class Uygulama:
     def git(self, n):
         if self.belge_var():
             if n != self.sayfa:
-                self.secili, self.secili_resim = [], None
+                self.secili, self.secili_resim, self.secili_metin = [], None, ""
             self.sayfa = n
             self.ciz()
 
@@ -731,6 +738,77 @@ class Uygulama:
         w.transient(self.pen)
         w.resizable(False, False)
         return w
+
+    def yazdir_penceresi(self):
+        """Yazıcı, sayfalar ve kopya sayısı seçilip açık belge (kaydedilmemiş değişiklikleriyle) yazdırılır."""
+        if not self.belge_var():
+            return
+        try:
+            adlar, varsayilan = pi.yazicilar()
+        except Exception as e:
+            return messagebox.showerror("Yazdır", f"Yazıcılar okunamadı.\n\n{e}")
+        if not adlar:
+            return messagebox.showerror("Yazdır", "Bilgisayarda kurulu yazıcı yok.")
+        from tkinter import ttk
+        n = self.doc.page_count
+        w = self.pencere("Yazdır")
+        yazici, tur = tk.StringVar(value=varsayilan), tk.StringVar(value="tumu")
+        aralik, kopya = tk.StringVar(value=f"1-{n}"), tk.IntVar(value=1)
+        tk.Label(w, text="Yazıcı").grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Combobox(w, textvariable=yazici, values=adlar, state="readonly", width=40).grid(
+            row=0, column=1, columnspan=2, sticky="w")
+        for i, (deger, yazi) in enumerate([("tumu", f"Bütün sayfalar ({n})"), ("bu", f"Bu sayfa ({self.sayfa + 1})"),
+                                           ("aralik", "Sayfalar:")], start=1):
+            tk.Radiobutton(w, text=yazi, variable=tur, value=deger, selectcolor=tema.YUZEY2,
+                           activebackground=tema.YUZEY).grid(row=i, column=0, columnspan=2, sticky="w")
+        tk.Entry(w, textvariable=aralik, width=20).grid(row=3, column=1, sticky="w")
+        tk.Label(w, text="Kopya").grid(row=4, column=0, sticky="w", pady=6)
+        tk.Spinbox(w, from_=1, to=99, width=5, textvariable=kopya).grid(row=4, column=1, sticky="w")
+        alt = tk.Frame(w, pady=10)
+        alt.grid(row=5, column=0, columnspan=3, sticky="e")
+
+        def tamam():
+            try:
+                sayfalar = (range(n) if tur.get() == "tumu" else [self.sayfa] if tur.get() == "bu" else
+                            [i for a, b in pi.aralik_coz(aralik.get(), n) for i in range(a, b + 1)])
+                adet = max(1, min(99, int(kopya.get())))
+            except (ValueError, tk.TclError) as e:
+                return messagebox.showerror("Hatalı seçim", str(e), parent=w)
+            w.destroy()
+            self.bilgi(f"Yazıcıya gönderiliyor: {yazici.get()}…")
+            self.pen.config(cursor="watch")
+            self.pen.update()
+            ad = os.path.basename(self.yol) if self.yol else tema.AD
+            try:
+                pi.yazdir(self.doc, yazici.get(), list(sayfalar), adet, ad)
+            except Exception as e:
+                self.bilgi("Yazdırılamadı.")
+                return messagebox.showerror("Yazdırılamadı", str(e))
+            finally:
+                self.pen.config(cursor="")
+            self.bilgi(f"{len(sayfalar)} sayfa × {adet} kopya yazıcıya gönderildi: {yazici.get()}")
+
+        tema.dugme(alt, "yazdir", "Yazdır", tamam, sol=False).pack(side="left", padx=4)
+        tema.dugme(alt, None, "İptal", w.destroy, sol=False).pack(side="left")
+        w.bind("<Return>", lambda e: tamam())
+        w.grab_set()
+
+    def metin_sec(self, s, rect):
+        """Araç seçili değilken çizilen kutudaki kelimeleri işaretler; Ctrl+C ile kopyalanır."""
+        self.tuval.delete("metin")
+        kelimeler = s.get_text("words", clip=rect, sort=True)  # (x0, y0, x1, y1, kelime, ...)
+        # PDF'te aynı satırdaki parçalar ayrı bloklarda olabilir: göründükleri satıra göre, soldan sağa grupla
+        satirlar = []
+        for k in sorted(kelimeler, key=lambda k: (k[1] + k[3]) / 2):
+            orta = (k[1] + k[3]) / 2
+            if satirlar and abs(orta - satirlar[-1][0]) < (k[3] - k[1]) / 2:
+                satirlar[-1][1].append(k)
+            else:
+                satirlar.append([orta, [k]])
+            self.tuval.create_rectangle(*self.kanvas_kutusu(s, k[:4]), outline=tema.VURGU, tags=("metin",))
+        self.secili_metin = "\n".join(" ".join(k[4] for k in sorted(v, key=lambda k: k[0])) for _, v in satirlar)
+        self.bilgi(f"{len(kelimeler)} kelime seçildi. Ctrl+C ile kopyalayın." if kelimeler
+                   else "Bu alanda seçilebilir yazı yok (taranmış sayfalarda yazı resimdir).")
 
     def disa_aktar(self, tur):
         """Açık belgeyi (kaydedilmemiş değişiklikleriyle) Word ya da PowerPoint dosyasına çevirir."""
@@ -891,7 +969,7 @@ class Uygulama:
         self.secimi_birak()
         for ad, b in self.mod_dugmeleri.items():
             tema.secili_yap(b, ad == self.mod)
-        self.tuval.config(cursor=("hand2" if self.mod == "sec" else "crosshair") if self.mod else "")
+        self.tuval.config(cursor=("hand2" if self.mod == "sec" else "crosshair") if self.mod else "xterm")
         self.bilgi(IPUCU.get(self.mod, "Araç kapatıldı."))
 
     def renk_sec(self):
@@ -986,14 +1064,51 @@ class Uygulama:
         self.secili = []
         if not self.degisiklik(lambda: pi.satirlari_donustur(s, sec, kx, ky, olcek, merkez)):
             return
-        s = self.doc[self.sayfa]
+        self.yeniden_sec(sec, kx, ky, olcek, merkez)
+        self.bilgi(mesaj)
+
+    def yeniden_sec(self, sec, kx=0, ky=0, olcek=1, merkez=(0, 0)):
+        """Taşınan / yapıştırılan satırları yeni yerlerinde seçer."""
         hedef = [pymupdf.Rect(pi.donusmus(l["bbox"][:2], kx, ky, olcek, merkez),
                               pi.donusmus(l["bbox"][2:], kx, ky, olcek, merkez)).normalize() for l in sec]
-        self.secili = [l for l in pi.satirlar(s)
+        self.secili = [l for l in pi.satirlar(self.doc[self.sayfa])
                        if any((pymupdf.Rect(l["bbox"]) & h).get_area() > 0.4 * pymupdf.Rect(l["bbox"]).get_area()
                               for h in hedef)]
         self.secim_ciz()
-        self.bilgi(mesaj)
+
+    def kopyala(self):
+        """Seçili satırları uygulama içi panoya (biçimleriyle) ve Windows panosuna (düz yazı) alır."""
+        if self.odak_yazida() or not self.doc:
+            return
+        if not self.mod and getattr(self, "secili_metin", ""):
+            self.pen.clipboard_clear()
+            self.pen.clipboard_append(self.secili_metin)
+            return self.bilgi("Seçili yazı kopyalandı.")
+        if self.mod != "duzenle" or not self.secili:
+            return self.bilgi("Kopyalamak için araç seçmeden yazının üstünden kutu çizin; eklediğiniz yazıyı biçimiyle "
+                              "kopyalamak için “Yazıyı düzenle” aracıyla seçin.")
+        self.pano = list(self.secili)
+        self.pen.clipboard_clear()
+        self.pen.clipboard_append("\n".join(pi.satir_metni(l) for l in self.pano).replace("\xa0", " "))
+        self.bilgi(f"{len(self.pano)} satır kopyalandı. Ctrl+V ile farenin olduğu yere yapıştırın.")
+
+    def yapistir(self):
+        """Kopyalanan satırları fare sayfanın üstündeyse oraya, değilse biraz kaydırarak yapıştırır."""
+        if self.odak_yazida() or not self.doc or not getattr(self, "pano", None):
+            return
+        s, sec, t = self.doc[self.sayfa], self.pano, self.tuval
+        cx, cy = t.winfo_pointerx() - t.winfo_rootx(), t.winfo_pointery() - t.winfo_rooty()
+        if 0 <= cx < t.winfo_width() and 0 <= cy < t.winfo_height():
+            p = pi.noktadan(s, (t.canvasx(cx) - KENAR) / self.zoom, (t.canvasy(cy) - KENAR) / self.zoom)
+            kx, ky = p.x - min(l["bbox"][0] for l in sec), p.y - min(l["bbox"][1] for l in sec)
+        else:
+            kx = ky = 12
+        if not self.degisiklik(lambda: pi.satirlari_yaz(s, sec, kx, ky)):
+            return
+        if self.mod != "duzenle":
+            self.mod_sec("duzenle")
+        self.yeniden_sec(sec, kx, ky)
+        self.bilgi(f"{len(sec)} satır yapıştırıldı. Oklarla ya da sürükleyerek yerini ayarlayabilirsiniz.")
 
     def ekran_vektoru(self, dx, dy):
         """Ekranda (görünen sayfada) dx, dy kadar kayma → PDF koordinatında kayma."""
@@ -1139,8 +1254,10 @@ class Uygulama:
                                         tags=("uzerinde",))
 
     def bas_(self, e):
-        if not self.mod:
+        if not self.doc:
             return
+        self.tuval.delete("metin")  # araçsız sürükleme = yazı seçimi (birak_ → metin_sec)
+        self.secili_metin = ""
         if self.mod == "duzenle":
             return self.tasi_bas(e)
         self.bas = self.nokta(e)
@@ -1181,6 +1298,8 @@ class Uygulama:
         kutu = lambda: pi.gorunumden(s, x0, y0, x1, y1)
         kucuk = abs(x1 - x0) < 5 or abs(y1 - y0) < 5
         mod = self.mod
+        if not mod:
+            return None if kucuk else self.metin_sec(s, kutu())
         if mod == "sec":
             return self.not_penceresi(s, pi.noktadan(s, x0, y0))
         if mod == "not":

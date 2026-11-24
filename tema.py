@@ -19,7 +19,7 @@ SIMGELER = {"ac": 0xE8E5, "kaydet": 0xE74E, "geri": 0xE7A7, "ileri": 0xE7A6, "on
             "vurgu": 0xE7E6, "alti": 0xE8DC, "ustu": 0xEDE0, "kalem": 0xEC87, "dikdortgen": 0xE739,
             "daire": 0xEA3A, "cizgi": 0xE738, "ok": 0xE72A, "damga": 0xE8EC, "imza": 0xEE56, "resim": 0xEB9F, "form": 0xE8A1,
             "doldur": 0xE70F, "karart": 0xE73B, "her_yerde": 0xED1A, "renk": 0xE790,
-            "donustur": 0xE8AB, "guncelle": 0xE895, "tam_ekran": 0xE740}
+            "donustur": 0xE8AB, "guncelle": 0xE895, "tam_ekran": 0xE740, "yazdir": 0xE749}
 
 _onbellek = {}
 

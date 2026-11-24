@@ -123,6 +123,11 @@ def satirlari_donustur(page, satir_listesi, kx=0, ky=0, olcek=1, merkez=(0, 0)):
     """Satırları kx, ky kadar kaydırır ve merkeze göre olcek kadar büyütür/küçültür. Her parça kendi yerine
     göre, kendi biçimiyle yazılır; yazı boyutu da olcek ile çarpılır."""
     yazilari_sil(page, satir_listesi)
+    satirlari_yaz(page, satir_listesi, kx, ky, olcek, merkez)
+
+
+def satirlari_yaz(page, satir_listesi, kx=0, ky=0, olcek=1, merkez=(0, 0)):
+    """Satırları (başka sayfadan da olabilir) kendi biçimleriyle kx, ky kaydırılmış olarak yazar: kopyala-yapıştır."""
     for l in satir_listesi:
         dx, dy = l["dir"]
         aci = round(math.degrees(math.atan2(-dy, dx)) / 90) * 90 % 360
@@ -654,6 +659,50 @@ def powerpoint_e(doc, yol, dpi=150):
                 sunu.Close()
             if not zaten_acik:
                 ppt.Quit()  # kullanıcının açık PowerPoint'ine dokunma
+
+
+def yazicilar():
+    """(yazıcı adları, varsayılan yazıcı)."""
+    import win32print
+    adlar = [p[2] for p in win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)]
+    try:
+        varsayilan = win32print.GetDefaultPrinter()
+    except Exception:
+        varsayilan = adlar[0] if adlar else ""
+    return adlar, varsayilan
+
+
+def yazdir(doc, yazici, sayfalar, kopya=1, ad="Polat PDF", dpi=300, dosya=None):
+    """Sayfaları resim olarak yazıcıya gönderir: kâğıdın yazdırılabilir alanına oranı korunarak sığdırılır,
+    ortalanır; yatay sayfa dik kâğıda (ya da tersi) döndürülerek basılır. Notlar ve işaretler de basılır."""
+    import win32ui
+    from PIL import Image, ImageWin
+    dc = win32ui.CreateDC()
+    dc.CreatePrinterDC(yazici)
+    try:
+        en, boy, yazici_dpi = dc.GetDeviceCaps(8), dc.GetDeviceCaps(10), dc.GetDeviceCaps(88)  # HORZRES, VERTRES, LOGPIXELSX
+        dc.StartDoc(ad, dosya) if dosya else dc.StartDoc(ad)  # dosya: "Print to PDF" gibi yazıcıda kayıt yeri sormadan
+        try:
+            for _ in range(kopya):
+                for i in sayfalar:
+                    s = doc[i]
+                    don = (s.rect.width > s.rect.height) != (en > boy)
+                    sw, sh = (s.rect.height, s.rect.width) if don else (s.rect.width, s.rect.height)
+                    olcek = min(en / sw, boy / sh)  # punto → yazıcı pikseli, alana sığacak kadar
+                    z = olcek * min(dpi, yazici_dpi) / yazici_dpi  # kâğıtta en fazla dpi çözünürlük: bellek şişmesin
+                    pix = s.get_pixmap(matrix=pymupdf.Matrix(z, z).prerotate(90 if don else 0), annots=True)
+                    im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                    w, h = int(sw * olcek), int(sh * olcek)
+                    x, y = (en - w) // 2, (boy - h) // 2
+                    dc.StartPage()
+                    ImageWin.Dib(im).draw(dc.GetHandleOutput(), (x, y, x + w, y + h))
+                    dc.EndPage()
+            dc.EndDoc()
+        except BaseException:
+            dc.AbortDoc()  # yarım iş yazıcı kuyruğunda takılı kalmasın
+            raise
+    finally:
+        dc.DeleteDC()
 
 
 def guvenli_kaydet(doc, yol):
