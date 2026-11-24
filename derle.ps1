@@ -10,7 +10,7 @@ python -c "import tema; tema.logo(256).save('polatpdf.ico', sizes=[(16,16),(24,2
 if ($LASTEXITCODE) { throw "Simge yapılamadı" }
 
 python -m PyInstaller --noconfirm --clean --onedir --windowed --name PolatPDF --icon polatpdf.ico `
-    --add-data "surum.txt;." --collect-submodules fontTools pdf_duzenleyici.py
+    --add-data "surum.txt;." --add-data "tessdata;tessdata" --collect-submodules fontTools pdf_duzenleyici.py
 if ($LASTEXITCODE) { throw "PyInstaller başarısız" }
 
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") |

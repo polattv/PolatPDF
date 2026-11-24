@@ -1,5 +1,5 @@
 """PDF işleri — arayüzden bağımsız, test edilebilir. Test: python pdf_islemleri.py"""
-import difflib, math, os, tempfile
+import difflib, math, os, sys, tempfile
 import pymupdf
 
 YAZI_TIPI = r"C:\Windows\Fonts\arial.ttf"  # yerleşik helv ş ğ ı İ çizemiyor
@@ -742,9 +742,10 @@ def yazdir(doc, yazici, sayfalar, kopya=1, ad="Polat PDF", dpi=300, dosya=None, 
         dc.DeleteDC()
 
 
-def guvenli_kaydet(doc, yol):
+def guvenli_kaydet(doc, yol, **ayar):
     """Önce geçici dosyaya yazar, sonra yerine koyar: yarıda kalan kayıt dosyayı bozmaz.
-    Açık dosyanın üstüne kaydediliyorsa geçici dosyanın yolunu döner; çağıran doc'u kapatıp yerine koyar."""
+    Açık dosyanın üstüne kaydediliyorsa geçici dosyanın yolunu döner; çağıran doc'u kapatıp yerine koyar.
+    ayar: doc.save'e ek/üstün ayarlar (ör. şifre koymak / kaldırmak için encryption, user_pw)."""
     ayni = os.path.normcase(os.path.abspath(yol)) == os.path.normcase(os.path.abspath(doc.name or ""))
     fd, gecici = tempfile.mkstemp(suffix=".pdf", dir=os.path.dirname(os.path.abspath(yol)))
     os.close(fd)
@@ -753,7 +754,7 @@ def guvenli_kaydet(doc, yol):
             doc.subset_fonts()  # gömülü Arial'in yalnızca kullanılan harfleri kalsın (~600 KB → birkaç KB)
         except Exception:
             pass  # fontTools yoksa dosya sadece büyük olur
-        doc.save(gecici, garbage=4, deflate=True, encryption=pymupdf.PDF_ENCRYPT_KEEP)  # şifre düşmesin
+        doc.save(gecici, **{"garbage": 4, "deflate": True, "encryption": pymupdf.PDF_ENCRYPT_KEEP, **ayar})  # şifre düşmesin
         if not ayni:
             os.replace(gecici, yol)
             gecici = None
@@ -763,9 +764,252 @@ def guvenli_kaydet(doc, yol):
         raise
 
 
-def kaydet_ve_ac(doc, yol, sifre=None):
+def sifre_ayari(sifre):
+    """Şifre koymak (AES-256; açma ve sahip şifresi aynı) ya da sifre=None ile kaldırmak için kayıt ayarı."""
+    if not sifre:
+        return {"encryption": pymupdf.PDF_ENCRYPT_NONE}
+    return {"encryption": pymupdf.PDF_ENCRYPT_AES_256, "user_pw": sifre, "owner_pw": sifre}
+
+
+def sikistir(doc, yol, seviye="orta", sifre=None):
+    """Resimleri küçültüp yeniden sıkıştırarak kaydeder; açık belgeye dokunmaz. (önceki, sonraki) bayt döner.
+    seviye: az (200 dpi), orta (150 dpi), cok (100 dpi) — ekranda okunur, yazıcıda da iyi çıkar."""
+    import io
+    from PIL import Image
+    dpi, kalite = {"az": (200, 85), "orta": (150, 75), "cok": (100, 60)}[seviye]
+    kopya = goruntuden_ac(anlik_goruntu(doc), sifre)
+    try:  # shortcut: PyMuPDF rewrite_images bu sürümde resimlere dokunmuyor; elle küçültülüp JPEG yapılır
+        gorulen = set()
+        for s in kopya:
+            for bilgi in s.get_image_info(xrefs=True):
+                x, kutu = bilgi["xref"], pymupdf.Rect(bilgi["bbox"])
+                if not x or x in gorulen or kutu.is_empty or kopya.xref_get_key(x, "SMask")[0] != "null":
+                    continue  # şeffaf resimler (imza, logo) olduğu gibi kalsın
+                gorulen.add(x)
+                pix = pymupdf.Pixmap(kopya, x)
+                if pix.n - pix.alpha not in (1, 3):  # CMYK vb.
+                    pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
+                im = Image.frombytes("L" if pix.n == 1 else "RGB", (pix.width, pix.height), pix.samples)
+                mevcut = max(pix.width, pix.height) / (max(kutu.width, kutu.height) / 72)  # döndürülmüşte de doğru
+                o = min(1, dpi / mevcut)
+                if o < 1:
+                    im = im.resize((max(1, int(im.width * o)), max(1, int(im.height * o))), Image.LANCZOS)
+                b = io.BytesIO()
+                im.save(b, "JPEG", quality=kalite, optimize=True)
+                if b.tell() < bilgi["size"]:  # yalnızca gerçekten küçülürse değiştir
+                    s.replace_image(x, stream=b.getvalue())
+        once = len(doc.tobytes(garbage=4, deflate=True, encryption=pymupdf.PDF_ENCRYPT_KEEP))  # normal kayıt boyutu
+        guvenli_kaydet(kopya, yol, clean=True, use_objstms=1)
+    finally:
+        kopya.close()
+    return once, os.path.getsize(yol)
+
+
+def hedef_listesi(n, sayfalar):
+    return sorted(set(sayfalar)) if sayfalar else list(range(n))
+
+
+def sayfalari_dondur(doc, sayfalar, aci):
+    for i in sayfalar:
+        doc[i].set_rotation((doc[i].rotation + aci) % 360)
+
+
+def sayfalari_sil(doc, sayfalar):
+    if len(set(sayfalar)) >= doc.page_count:
+        raise ValueError("Bütün sayfalar silinemez; en az bir sayfa kalmalı.")
+    doc.delete_pages(sorted(set(sayfalar)))
+
+
+def sayfalari_cikar(doc, sayfalar, yol):
+    """Seçili sayfaları (sırasıyla) yeni bir PDF'e kaydeder."""
+    yeni = pymupdf.open()
+    try:
+        for i in sorted(set(sayfalar)):
+            yeni.insert_pdf(doc, from_page=i, to_page=i)
+        guvenli_kaydet(yeni, yol)
+    finally:
+        yeni.close()
+
+
+def bos_sayfa_ekle(doc, sonra):
+    """sonra'daki sayfanın arkasına, onunla aynı boyutta boş sayfa ekler. Yeni sayfanın sırasını döner."""
+    r = doc[sonra].rect
+    doc.new_page(pno=sonra + 1, width=r.width, height=r.height)
+    return sonra + 1
+
+
+def _gorunur_kutuya_yaz(page, x0, y0, x1, y1, metin, boyut, hiza, renk=(0.25, 0.25, 0.25)):
+    """Ekranda görülen sayfa koordinatındaki kutuya yazar (döndürülmüş sayfada da doğru yerde, düz okunur)."""
+    page.insert_textbox(gorunumden(page, x0, y0, x1, y1), metin, fontsize=boyut, fontname=YAZI_ADI,
+                        fontfile=YAZI_TIPI, color=renk, rotate=page.rotation, align=hiza)
+
+
+def ust_alt_bilgi(doc, sayfalar=None, filigran="", ust="", alt="", numara="", boyut=10, filigran_opaklik=0.15):
+    """Seçili (yoksa bütün) sayfalara çapraz filigran, üst bilgi, alt bilgi ve sayfa numarası basar.
+    numara: '' yok, ya da '{n}' / 'Sayfa {n} / {N}' gibi biçim (sağ alta yazılır)."""
+    hedef = hedef_listesi(doc.page_count, sayfalar)
+    font = pymupdf.Font(fontfile=YAZI_TIPI)
+    for i in hedef:
+        s = doc[i]
+        en, boy, k = s.rect.width, s.rect.height, 28  # görünen boyut, kenar boşluğu
+        if ust:
+            _gorunur_kutuya_yaz(s, k, k / 2, en - k, k / 2 + boyut * 2, ust, boyut, 1)
+        if alt:
+            _gorunur_kutuya_yaz(s, k, boy - k / 2 - boyut * 2, en - k, boy - k / 2, alt, boyut, 1)
+        if numara:
+            yazi = numara.replace("{n}", str(i + 1)).replace("{N}", str(doc.page_count))
+            _gorunur_kutuya_yaz(s, k, boy - k / 2 - boyut * 2, en - k, boy - k / 2, yazi, boyut, 2)
+        if filigran:
+            fs = min(en, boy) / max(4, len(filigran)) * 1.6  # sayfanın çaprazına sığacak kadar büyük
+            uzunluk = font.text_length(filigran, fontsize=fs)
+            merkez = pymupdf.Point(en / 2, boy / 2) * s.derotation_matrix
+            aci = math.degrees(math.atan2(boy, en))  # sol alttan sağ üste
+            s.insert_text(merkez - (uzunluk / 2, -fs / 3), filigran, fontsize=fs, fontname=YAZI_ADI,
+                          fontfile=YAZI_TIPI, color=(0.6, 0.6, 0.6), fill_opacity=filigran_opaklik,
+                          morph=(merkez, pymupdf.Matrix(aci + s.rotation)))
+    return len(hedef)
+
+
+def resimlerden_pdf(yollar, yol):
+    """Her resmi (telefon fotoğrafı da) A4 sayfaya, oranı korunarak ve yönüne göre dik/yatay sayfaya koyar."""
+    from PIL import Image, ImageOps
+    yeni = pymupdf.open()
+    try:
+        for r in yollar:
+            with Image.open(r) as im:
+                im = ImageOps.exif_transpose(im)
+                yatay = im.width > im.height
+                veri = png_baytlari(im.convert("RGBA") if im.mode in ("RGBA", "LA", "P") else im.convert("RGB"))
+            a4 = pymupdf.paper_rect("a4-l" if yatay else "a4")
+            s = yeni.new_page(width=a4.width, height=a4.height)
+            s.insert_image(a4 + (20, 20, -20, -20), stream=veri, keep_proportion=True)
+        guvenli_kaydet(yeni, yol)
+        return yeni.page_count
+    finally:
+        yeni.close()
+
+
+def resimlere(doc, klasor, ad, bicim="png", dpi=150, sayfalar=None):
+    """Sayfaları resim dosyası olarak kaydeder (ad_1.png, ...). Kaydedilen yolları döner."""
+    yollar = []
+    for i in hedef_listesi(doc.page_count, sayfalar):
+        y = os.path.join(klasor, f"{ad}_{i + 1}.{bicim}")
+        pix = doc[i].get_pixmap(dpi=dpi, annots=True)
+        pix.save(y, jpg_quality=90) if bicim == "jpg" else pix.save(y)
+        yollar.append(y)
+    return yollar
+
+
+TESSDATA = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "tessdata")
+
+
+def taranmis_mi(page):
+    """Sayfada seçilebilir yazı yok ama resim var: taranmış / fotoğraf sayfası."""
+    return not page.get_text().strip() and bool(page.get_images())
+
+
+def ocr_yap(doc, sayfalar=None, hepsi=False, ilerleme=None):
+    """Yazısı olmayan sayfalardaki yazıyı (Türkçe + İngilizce) tanır ve sayfaya görünmez yazı olarak ekler:
+    sayfa aynı görünür, ama arama, seçme ve kopyalama çalışır. hepsi=True: yazısı olan sayfalar da taranır.
+    Tanınan sayfa sayısını döner."""
+    hedef, font, n = hedef_listesi(doc.page_count, sayfalar), pymupdf.Font(fontfile=YAZI_TIPI), 0
+    for k, i in enumerate(hedef):
+        if ilerleme:
+            ilerleme(k + 1, len(hedef))
+        s = doc[i]
+        if not hepsi and s.get_text().strip():
+            continue
+        donus = s.rotation
+        s.set_rotation(0)  # döndürülmüş sayfada OCR yan duran görüntüyü okuyamaz: sayfanın kendi yönünde tanı
+        try:
+            bloklar = s.get_text("dict", textpage=s.get_textpage_ocr(language="tur+eng", dpi=300, full=True,
+                                                                     tessdata=TESSDATA))["blocks"]
+            ocr_yaz(s, bloklar, font)
+        finally:
+            s.set_rotation(donus)
+        n += 1
+    return n
+
+
+def ocr_yaz(s, bloklar, font):
+    """OCR sonucunu görünmez yazı olarak sayfaya yazar; her kelime kendi kutusunun genişliğine sığdırılır."""
+    for b in bloklar:
+        for l in b.get("lines", []):
+            dx, dy = l["dir"]
+            aci = round(math.degrees(math.atan2(-dy, dx)) / 90) * 90 % 360
+            for sp in l["spans"]:
+                metin = sp["text"].strip()
+                if not metin:
+                    continue
+                kutu = pymupdf.Rect(sp["bbox"])
+                en = kutu.width if aci in (0, 180) else kutu.height
+                boyut = min(sp["size"] * 1.2, en / max(font.text_length(metin, fontsize=1), 0.01))
+                s.insert_text(sp["origin"], metin, fontsize=max(boyut, 1), fontname=YAZI_ADI, fontfile=YAZI_TIPI,
+                              render_mode=3, rotate=aci)  # 3: görünmez yazı (taramanın üstünde)
+
+
+def kelimeleri_satirla(kelimeler):
+    """get_text('words') kelimelerini sayfada göründükleri satırlara (yukarıdan aşağı, soldan sağa) dizer.
+    PDF'te aynı satırdaki parçalar ayrı bloklarda olabilir; bu yüzden konuma göre gruplanır."""
+    satirlar = []
+    for k in sorted(kelimeler, key=lambda k: (k[1] + k[3]) / 2):
+        orta = (k[1] + k[3]) / 2
+        if satirlar and abs(orta - satirlar[-1][0]) < (k[3] - k[1]) / 2:
+            satirlar[-1][1].append(k)
+        else:
+            satirlar.append([orta, [k]])
+    return [sorted(v, key=lambda k: k[0]) for _, v in satirlar]
+
+
+def hucre_degeri(metin):
+    """'9.200,00' / '-1.234,5' / '56,15' → sayı (Excel'de hesaplanabilsin); vergi no, tarih, 0'la başlayan
+    numaralar ve diğer her şey yazı olarak kalır."""
+    import re
+    m = (metin or "").strip()
+    if re.fullmatch(r"-?\d{1,3}(\.\d{3})+(,\d+)?|-?\d+,\d+", m):
+        return float(m.replace(".", "").replace(",", "."))
+    if re.fullmatch(r"-?[1-9]\d{0,8}", m):  # 10+ haneli (vergi/TC no, telefon) yazı kalsın: numaradır, tutar değil
+        return int(m)
+    return m
+
+
+def excele(doc, yol, sayfalar=None):
+    """Sayfalardaki tabloları Excel'e aktarır (her PDF sayfası bir çalışma sayfası). Tablo bulunamayan sayfada
+    yazılar satır satır, aralarındaki geniş boşluklardan sütunlara bölünerek yazılır. Yazılan satır sayısını döner."""
+    from openpyxl import Workbook
+    from openpyxl.utils import get_column_letter
+    kitap = Workbook()
+    kitap.remove(kitap.active)
+    toplam = 0
+    for i in hedef_listesi(doc.page_count, sayfalar):
+        s, sayfa = doc[i], kitap.create_sheet(f"Sayfa {i + 1}")
+        satirlar = []
+        for t in s.find_tables().tables:
+            satirlar += [[(h or "").replace("\n", " ") for h in r] for r in t.extract()] + [[]]
+        if not satirlar:  # çizgisiz tablo (banka ekstresi vb.): geniş boşluk = yeni sütun
+            for satir in kelimeleri_satirla(s.get_text("words")):
+                hucreler, onceki = [], None
+                for k in satir:
+                    bosluk = (k[3] - k[1]) * 0.9  # yaklaşık iki harf
+                    if onceki is not None and k[0] - onceki[2] < bosluk:
+                        hucreler[-1] += " " + k[4]
+                    else:
+                        hucreler.append(k[4])
+                    onceki = k
+                satirlar.append(hucreler)
+        for r in satirlar:
+            sayfa.append([hucre_degeri(h) for h in r])
+        toplam += sum(1 for r in satirlar if r)
+        for c, sutun in enumerate(sayfa.columns, start=1):  # sütun genişliği içeriğe göre
+            sayfa.column_dimensions[get_column_letter(c)].width = min(60, max((len(str(h.value or "")) for h in sutun),
+                                                                              default=8) + 2)
+    kitap.save(yol)
+    return toplam
+
+
+def kaydet_ve_ac(doc, yol, sifre=None, **ayar):
     """Kaydeder ve kaydedilen dosyayı açık belge olarak döner."""
-    gecici = guvenli_kaydet(doc, yol)
+    gecici = guvenli_kaydet(doc, yol, **ayar)
     doc.close()
     if gecici:  # açık dosyanın üstüne: belge kapandı, artık yerine konabilir
         os.replace(gecici, yol)
@@ -1103,6 +1347,34 @@ def test():
     kalan = {w.field_name: w.field_value for w in s.widgets()}
     assert "ad" not in kalan and kalan["ad_2"] == "Müller Öç" and kalan["secim"] == "Evet"
     assert kalan["onay"] not in ("Off", False, ""), kalan
+
+    # 1.1: sıkıştırma, şifre, sayfa işleri, filigran, OCR, Excel sayıları
+    import shutil
+    k = tempfile.mkdtemp()
+    try:
+        d = pymupdf.open()
+        s = d.new_page()
+        s.insert_text((60, 100), "Gumruk beyannamesi 2026", fontsize=28)
+        tarama = pymupdf.open()  # yazıyı resme çevir: taranmış sayfa
+        tarama.new_page().insert_image(pymupdf.Rect(0, 0, 595, 842), pixmap=s.get_pixmap(dpi=200))
+        assert taranmis_mi(tarama[0])
+        assert ocr_yap(tarama) == 1 and tarama[0].search_for("beyannamesi"), "OCR (tessdata) çalışmadı: " + TESSDATA
+        guvenli_kaydet(d, os.path.join(k, "s.pdf"), **sifre_ayari("x"))
+        assert pymupdf.open(os.path.join(k, "s.pdf")).needs_pass
+        once, sonra = sikistir(tarama, os.path.join(k, "k.pdf"), "cok")
+        assert sonra < once, (once, sonra)
+        e = pymupdf.open()
+        for _ in range(3):
+            e.new_page()
+        sayfalari_dondur(e, [0, 2], 270)
+        assert [p.rotation for p in e] == [270, 0, 270]
+        bos_sayfa_ekle(e, 0)
+        sayfalari_sil(e, [1])
+        assert e.page_count == 3
+        assert ust_alt_bilgi(e, filigran="KOPYADIR", numara="{n}/{N}") == 3 and "1/3" in e[0].get_text()
+        assert [hucre_degeri(x) for x in ("9.200,00", "5581631660", "30")] == [9200.0, "5581631660", 30]
+    finally:
+        shutil.rmtree(k, ignore_errors=True)
     print("Tüm testler geçti.")
 
 

@@ -19,7 +19,8 @@ SIMGELER = {"ac": 0xE8E5, "kaydet": 0xE74E, "geri": 0xE7A7, "ileri": 0xE7A6, "on
             "vurgu": 0xE7E6, "alti": 0xE8DC, "ustu": 0xEDE0, "kalem": 0xEC87, "dikdortgen": 0xE739,
             "daire": 0xEA3A, "cizgi": 0xE738, "ok": 0xE72A, "damga": 0xE8EC, "imza": 0xEE56, "resim": 0xEB9F, "form": 0xE8A1,
             "doldur": 0xE70F, "karart": 0xE73B, "her_yerde": 0xED1A, "renk": 0xE790,
-            "donustur": 0xE8AB, "guncelle": 0xE895, "tam_ekran": 0xE740, "yazdir": 0xE749}
+            "donustur": 0xE8AB, "guncelle": 0xE895, "tam_ekran": 0xE740, "yazdir": 0xE749,
+            "sikistir": 0xE73F, "sola_dondur": 0xE7A7, "cikar": 0xE8B7, "bos": 0xE7C3, "filigran": 0xE8D2, "ocr": 0xEE6F}
 
 _onbellek = {}
 
@@ -79,6 +80,10 @@ def uygula(pen):
         st.configure("TCombobox", fieldbackground=YUZEY2, background=YUZEY2, foreground=YAZI, arrowcolor=YAZI,
                      bordercolor=CERCEVE, lightcolor=YUZEY2, darkcolor=YUZEY2)
         st.map("TCombobox", fieldbackground=[("readonly", YUZEY2)], foreground=[("readonly", YAZI)])
+        st.configure("Treeview", background=YUZEY, fieldbackground=YUZEY, foreground=YAZI, borderwidth=0,
+                     rowheight=24)
+        st.map("Treeview", background=[("selected", VURGU2)], foreground=[("selected", "white")])
+        st.configure("TProgressbar", background=VURGU, troughcolor=YUZEY2, bordercolor=YUZEY2)
     except tk.TclError:
         pass
     pen._polat_logo = ImageTk.PhotoImage(logo(64))  # referans tutulmazsa simge kaybolur
