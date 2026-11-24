@@ -672,13 +672,49 @@ def yazicilar():
     return adlar, varsayilan
 
 
-def yazdir(doc, yazici, sayfalar, kopya=1, ad="Polat PDF", dpi=300, dosya=None):
-    """Sayfaları resim olarak yazıcıya gönderir: kâğıdın yazdırılabilir alanına oranı korunarak sığdırılır,
-    ortalanır; yatay sayfa dik kâğıda (ya da tersi) döndürülerek basılır. Notlar ve işaretler de basılır."""
-    import win32ui
+def yazici_ozellikleri(yazici):
+    """Yazıcının o anki ayarları ve yetenekleri: {"devmode", "kagitlar": [(no, ad)], "cift_taraf", "renkli"}."""
+    import win32print as wp
+    h = wp.OpenPrinter(yazici)
+    try:
+        bilgi = wp.GetPrinter(h, 2)
+    finally:
+        wp.ClosePrinter(h)
+    port = bilgi["pPortName"]
+    return {"devmode": bilgi["pDevMode"],
+            "kagitlar": list(zip(wp.DeviceCapabilities(yazici, port, 2), wp.DeviceCapabilities(yazici, port, 16))),
+            "cift_taraf": wp.DeviceCapabilities(yazici, port, 7) == 1, "renkli": wp.DeviceCapabilities(yazici, port, 32) == 1}
+
+
+def ayarlari_uygula(yazici, devmode, hwnd=0, pencere=False, **alanlar):
+    """devmode'a kagit (no), yon (1 dikey, 2 yatay), renk (1 s/b, 2 renkli), cift (1 tek, 2 uzun, 3 kısa kenar)
+    yazar; pencere=True ise yazıcının kendi ayar penceresini açar. Tamam'a basıldıysa (ya da pencere yoksa) True."""
+    import win32print as wp
+    for ad, (alan, bayrak) in {"kagit": ("PaperSize", 0x2), "yon": ("Orientation", 0x1), "renk": ("Color", 0x800),
+                               "cift": ("Duplex", 0x1000)}.items():
+        if alanlar.get(ad):
+            setattr(devmode, alan, alanlar[ad])
+            devmode.Fields |= bayrak  # sürücü yalnızca işaretli alanları okur
+    h = wp.OpenPrinter(yazici)
+    try:  # sürücü kendi gizli ayarlarını da birleştirsin (DM_IN_BUFFER | DM_OUT_BUFFER [| DM_IN_PROMPT])
+        sonuc = wp.DocumentProperties(hwnd, h, yazici, devmode, devmode, 2 | 8 | (4 if pencere else 0))
+    finally:
+        wp.ClosePrinter(h)
+    return sonuc == 1  # IDOK
+
+
+def yazdir(doc, yazici, sayfalar, kopya=1, ad="Polat PDF", dpi=300, dosya=None, devmode=None, dondur=True,
+           sigdir=True):
+    """Sayfaları resim olarak yazıcıya gönderir; devmode verilirse kâğıt/yön/renk/çift taraf ondan gelir.
+    sigdir: kâğıdın yazdırılabilir alanına oranı korunarak sığdırılır (değilse gerçek boyut), ortalanır.
+    dondur: yatay sayfa dik kâğıda (ya da tersi) döndürülerek basılır. Notlar ve işaretler de basılır."""
+    import win32gui, win32ui
     from PIL import Image, ImageWin
-    dc = win32ui.CreateDC()
-    dc.CreatePrinterDC(yazici)
+    if devmode is None:
+        dc = win32ui.CreateDC()
+        dc.CreatePrinterDC(yazici)
+    else:
+        dc = win32ui.CreateDCFromHandle(win32gui.CreateDC("WINSPOOL", yazici, devmode))
     try:
         en, boy, yazici_dpi = dc.GetDeviceCaps(8), dc.GetDeviceCaps(10), dc.GetDeviceCaps(88)  # HORZRES, VERTRES, LOGPIXELSX
         dc.StartDoc(ad, dosya) if dosya else dc.StartDoc(ad)  # dosya: "Print to PDF" gibi yazıcıda kayıt yeri sormadan
@@ -686,9 +722,10 @@ def yazdir(doc, yazici, sayfalar, kopya=1, ad="Polat PDF", dpi=300, dosya=None):
             for _ in range(kopya):
                 for i in sayfalar:
                     s = doc[i]
-                    don = (s.rect.width > s.rect.height) != (en > boy)
+                    don = dondur and (s.rect.width > s.rect.height) != (en > boy)
                     sw, sh = (s.rect.height, s.rect.width) if don else (s.rect.width, s.rect.height)
-                    olcek = min(en / sw, boy / sh)  # punto → yazıcı pikseli, alana sığacak kadar
+                    # punto → yazıcı pikseli: alana sığacak kadar, ya da gerçek boyut (taşan kısım kesilir)
+                    olcek = min(en / sw, boy / sh) if sigdir else yazici_dpi / 72
                     z = olcek * min(dpi, yazici_dpi) / yazici_dpi  # kâğıtta en fazla dpi çözünürlük: bellek şişmesin
                     pix = s.get_pixmap(matrix=pymupdf.Matrix(z, z).prerotate(90 if don else 0), annots=True)
                     im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)

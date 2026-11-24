@@ -752,42 +752,106 @@ class Uygulama:
         from tkinter import ttk
         n = self.doc.page_count
         w = self.pencere("Yazdır")
+        YONLER = {"Otomatik (sayfaya göre)": 0, "Dikey": 1, "Yatay": 2}
+        RENKLER = {"Renkli": 2, "Siyah-beyaz": 1}
+        CIFTLER = {"Tek taraf": 1, "Çift taraf — uzun kenardan çevir": 2, "Çift taraf — kısa kenardan çevir": 3}
         yazici, tur = tk.StringVar(value=varsayilan), tk.StringVar(value="tumu")
         aralik, kopya = tk.StringVar(value=f"1-{n}"), tk.IntVar(value=1)
-        tk.Label(w, text="Yazıcı").grid(row=0, column=0, sticky="w", pady=3)
-        ttk.Combobox(w, textvariable=yazici, values=adlar, state="readonly", width=40).grid(
-            row=0, column=1, columnspan=2, sticky="w")
+        kagit, yon, renk, cift = tk.StringVar(), tk.StringVar(value="Otomatik (sayfaya göre)"), tk.StringVar(), \
+            tk.StringVar()
+        sigdir = tk.BooleanVar(value=True)
+        oz = {}  # seçili yazıcının devmode'u ve yetenekleri
+
+        def satir(r, yazi, deger, secenekler):
+            tk.Label(w, text=yazi).grid(row=r, column=0, sticky="w", pady=3)
+            k = ttk.Combobox(w, textvariable=deger, values=secenekler, state="readonly", width=40)
+            k.grid(row=r, column=1, columnspan=2, sticky="w")
+            return k
+
+        yazici_kutusu = satir(0, "Yazıcı", yazici, adlar)
+        kagit_kutusu = satir(1, "Kâğıt", kagit, [])
+        satir(2, "Yön", yon, list(YONLER))
+        renk_kutusu = satir(3, "Renk", renk, list(RENKLER))
+        cift_kutusu = satir(4, "Baskı", cift, list(CIFTLER))
+        tk.Checkbutton(w, text="Sayfaya sığdır (kapalıysa gerçek boyut)", variable=sigdir,
+                       selectcolor=tema.YUZEY2, activebackground=tema.YUZEY).grid(row=5, column=0, columnspan=3,
+                                                                                  sticky="w", pady=(6, 0))
         for i, (deger, yazi) in enumerate([("tumu", f"Bütün sayfalar ({n})"), ("bu", f"Bu sayfa ({self.sayfa + 1})"),
-                                           ("aralik", "Sayfalar:")], start=1):
+                                           ("aralik", "Sayfalar:")], start=6):
             tk.Radiobutton(w, text=yazi, variable=tur, value=deger, selectcolor=tema.YUZEY2,
                            activebackground=tema.YUZEY).grid(row=i, column=0, columnspan=2, sticky="w")
-        tk.Entry(w, textvariable=aralik, width=20).grid(row=3, column=1, sticky="w")
-        tk.Label(w, text="Kopya").grid(row=4, column=0, sticky="w", pady=6)
-        tk.Spinbox(w, from_=1, to=99, width=5, textvariable=kopya).grid(row=4, column=1, sticky="w")
+        tk.Entry(w, textvariable=aralik, width=20).grid(row=8, column=1, sticky="w")
+        tk.Label(w, text="Kopya").grid(row=9, column=0, sticky="w", pady=6)
+        tk.Spinbox(w, from_=1, to=99, width=5, textvariable=kopya).grid(row=9, column=1, sticky="w")
         alt = tk.Frame(w, pady=10)
-        alt.grid(row=5, column=0, columnspan=3, sticky="e")
+        alt.grid(row=10, column=0, columnspan=3, sticky="e")
+
+        def goster():
+            """Kutuları seçili yazıcının devmode'una göre doldurur."""
+            dm = oz["devmode"]
+            kagit.set(next((ad for no, ad in oz["kagitlar"] if no == dm.PaperSize), ""))
+            if yon.get() != "Otomatik (sayfaya göre)":
+                yon.set("Yatay" if dm.Orientation == 2 else "Dikey")
+            renk.set("Siyah-beyaz" if not oz["renkli"] or dm.Color == 1 else "Renkli")
+            cift.set(next((ad for ad, no in CIFTLER.items() if no == dm.Duplex), "Tek taraf") if oz["cift_taraf"]
+                     else "Tek taraf")
+            renk_kutusu.config(state="readonly" if oz["renkli"] else "disabled")
+            cift_kutusu.config(state="readonly" if oz["cift_taraf"] else "disabled")
+
+        def yazici_degisti(_=None):
+            try:
+                oz.update(pi.yazici_ozellikleri(yazici.get()))
+            except Exception as e:
+                oz.clear()
+                return messagebox.showerror("Yazıcı", f"Yazıcı ayarları okunamadı.\n\n{e}", parent=w)
+            kagit_kutusu.config(values=[ad for _, ad in oz["kagitlar"]])
+            goster()
+
+        def ayarla(pencere=False):
+            """Kutulardaki seçimleri devmode'a yazar; pencere=True ise yazıcının kendi ayar penceresini açar."""
+            yon_no = YONLER[yon.get()]
+            return pi.ayarlari_uygula(
+                yazici.get(), oz["devmode"], int(w.frame(), 16), pencere,
+                kagit=next((no for no, ad in oz["kagitlar"] if ad == kagit.get()), None),
+                yon=yon_no or 1,  # otomatikte kâğıt dik, yatay sayfalar döndürülür
+                renk=RENKLER[renk.get()] if oz["renkli"] else None,
+                cift=CIFTLER[cift.get()] if oz["cift_taraf"] else None)
+
+        def ozellikler():
+            if oz and ayarla(pencere=True):
+                if yon.get() == "Otomatik (sayfaya göre)" and oz["devmode"].Orientation == 2:
+                    yon.set("Yatay")  # kullanıcı sürücü penceresinde yatay seçtiyse otomatik kalmasın
+                goster()
 
         def tamam():
+            if not oz:
+                return messagebox.showerror("Yazıcı", "Yazıcı ayarları okunamadı.", parent=w)
             try:
                 sayfalar = (range(n) if tur.get() == "tumu" else [self.sayfa] if tur.get() == "bu" else
                             [i for a, b in pi.aralik_coz(aralik.get(), n) for i in range(a, b + 1)])
                 adet = max(1, min(99, int(kopya.get())))
             except (ValueError, tk.TclError) as e:
                 return messagebox.showerror("Hatalı seçim", str(e), parent=w)
+            otomatik = YONLER[yon.get()] == 0
+            ayarla()
             w.destroy()
             self.bilgi(f"Yazıcıya gönderiliyor: {yazici.get()}…")
             self.pen.config(cursor="watch")
             self.pen.update()
             ad = os.path.basename(self.yol) if self.yol else tema.AD
             try:
-                pi.yazdir(self.doc, yazici.get(), list(sayfalar), adet, ad)
+                pi.yazdir(self.doc, yazici.get(), list(sayfalar), adet, ad, devmode=oz["devmode"], dondur=otomatik,
+                          sigdir=sigdir.get())
             except Exception as e:
                 self.bilgi("Yazdırılamadı.")
                 return messagebox.showerror("Yazdırılamadı", str(e))
             finally:
                 self.pen.config(cursor="")
-            self.bilgi(f"{len(sayfalar)} sayfa × {adet} kopya yazıcıya gönderildi: {yazici.get()}")
+            self.bilgi(f"{len(sayfalar)} sayfa × {adet} kopya yazıcıya gönderildi: {yazici.get()} ({kagit.get()})")
 
+        yazici_kutusu.bind("<<ComboboxSelected>>", yazici_degisti)
+        yazici_degisti()
+        tema.dugme(alt, None, "Yazıcı özellikleri…", ozellikler, sol=False).pack(side="left", padx=(0, 16))
         tema.dugme(alt, "yazdir", "Yazdır", tamam, sol=False).pack(side="left", padx=4)
         tema.dugme(alt, None, "İptal", w.destroy, sol=False).pack(side="left")
         w.bind("<Return>", lambda e: tamam())
