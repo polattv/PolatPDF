@@ -1,12 +1,39 @@
 """Polat PDF teması — PolaTv (IPTV) uygulamasının renkleri, koyu yüzeyleri ve beyaz çizgi simgeleri.
 Renkleri değiştirmek için sadece buraya bak (IPTV: ui/theme/Theme.kt)."""
+import json, os
 import tkinter as tk
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageTk
 
 AD = "Polat PDF"
-ZEMIN, YUZEY, YUZEY2, USTUNDE = "#0A0A10", "#13131B", "#1C1C27", "#26263A"
-CERCEVE, YAZI, YAZI2 = "#34344A", "#F2F2F7", "#C9C9DA"
-VURGU, VURGU2, VURGU_ACIK = "#FF4D6D", "#A4133C", "#FF8FA3"  # IPTV AccentStart, AccentEnd, secondary
+AYAR_DOSYASI = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "PDFDuzenleyici", "ayarlar.json")
+
+
+def ayar_oku():
+    try:
+        with open(AYAR_DOSYASI, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def ayar_yaz(**degerler):
+    ayar = {**ayar_oku(), **degerler}
+    os.makedirs(os.path.dirname(AYAR_DOSYASI), exist_ok=True)
+    with open(AYAR_DOSYASI, "w", encoding="utf-8") as f:
+        json.dump(ayar, f, ensure_ascii=False)
+
+
+ACIK = ayar_oku().get("tema") == "acik"  # renkler açılışta seçilir: tema değişikliği yeniden açınca geçerli
+if ACIK:
+    ZEMIN, YUZEY, YUZEY2, USTUNDE = "#E6E7EE", "#F5F5F8", "#E2E3EB", "#D3D5E0"
+    CERCEVE, YAZI, YAZI2 = "#C3C5D2", "#1B1B24", "#4A4A5C"
+    VURGU, VURGU2, VURGU_ACIK = "#FF4D6D", "#C9184A", "#C9184A"
+    FARK_EKSI, FARK_ARTI = "#C1121F", "#1B7F3B"
+else:
+    ZEMIN, YUZEY, YUZEY2, USTUNDE = "#0A0A10", "#13131B", "#1C1C27", "#26263A"
+    CERCEVE, YAZI, YAZI2 = "#34344A", "#F2F2F7", "#C9C9DA"
+    VURGU, VURGU2, VURGU_ACIK = "#FF4D6D", "#A4133C", "#FF8FA3"  # IPTV AccentStart, AccentEnd, secondary
+    FARK_EKSI, FARK_ARTI = "#FF7B8A", "#6FDC8C"
 YAZI_TIPI = ("Segoe UI", 10)
 KALIN = ("Segoe UI Semibold", 10)
 
@@ -20,7 +47,7 @@ SIMGELER = {"ac": 0xE8E5, "kaydet": 0xE74E, "geri": 0xE7A7, "ileri": 0xE7A6, "on
             "daire": 0xEA3A, "cizgi": 0xE738, "ok": 0xE72A, "damga": 0xE8EC, "imza": 0xEE56, "resim": 0xEB9F, "form": 0xE8A1,
             "doldur": 0xE70F, "karart": 0xE73B, "her_yerde": 0xED1A, "renk": 0xE790,
             "donustur": 0xE8AB, "guncelle": 0xE895, "tam_ekran": 0xE740, "yazdir": 0xE749,
-            "sikistir": 0xE73F, "sola_dondur": 0xE7A7, "cikar": 0xE8B7, "bos": 0xE7C3, "filigran": 0xE8D2, "ocr": 0xEE6F}
+            "sikistir": 0xE73F, "sola_dondur": 0xE7A7, "cikar": 0xE8B7, "bos": 0xE7C3, "filigran": 0xE8D2, "ocr": 0xEE6F, "karsilastir": 0xE8F1}
 
 _onbellek = {}
 
@@ -88,11 +115,11 @@ def uygula(pen):
         pass
     pen._polat_logo = ImageTk.PhotoImage(logo(64))  # referans tutulmazsa simge kaybolur
     pen.iconphoto(True, pen._polat_logo)
-    try:  # Windows başlık çubuğu da koyu olsun (Windows 10/11)
+    try:  # Windows başlık çubuğu da temaya uysun (Windows 10/11)
         import ctypes
         pen.update_idletasks()
         hwnd = ctypes.windll.user32.GetParent(pen.winfo_id())
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(ctypes.c_int(1)), 4)  # koyu mod
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(ctypes.c_int(0 if ACIK else 1)), 4)
         renk = int(ZEMIN[5:7] + ZEMIN[3:5] + ZEMIN[1:3], 16)  # COLORREF: BGR
         ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, ctypes.byref(ctypes.c_int(renk)), 4)  # başlık rengi
     except Exception:

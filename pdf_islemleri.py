@@ -783,8 +783,10 @@ def sikistir(doc, yol, seviye="orta", sifre=None):
         for s in kopya:
             for bilgi in s.get_image_info(xrefs=True):
                 x, kutu = bilgi["xref"], pymupdf.Rect(bilgi["bbox"])
-                if not x or x in gorulen or kutu.is_empty or kopya.xref_get_key(x, "SMask")[0] != "null":
-                    continue  # şeffaf resimler (imza, logo) olduğu gibi kalsın
+                if (not x or x in gorulen or kutu.is_empty or kopya.xref_get_key(x, "SMask")[0] != "null"
+                        or kopya.xref_get_key(x, "Mask")[0] != "null"
+                        or kopya.xref_get_key(x, "ImageMask")[1] == "true"):
+                    continue  # şeffaf / maskeli resimler (imza, logo) olduğu gibi kalsın: JPEG'de kutu olurlar
                 gorulen.add(x)
                 pix = pymupdf.Pixmap(kopya, x)
                 if pix.n - pix.alpha not in (1, 3):  # CMYK vb.
@@ -840,8 +842,12 @@ def bos_sayfa_ekle(doc, sonra):
 
 def _gorunur_kutuya_yaz(page, x0, y0, x1, y1, metin, boyut, hiza, renk=(0.25, 0.25, 0.25)):
     """Ekranda görülen sayfa koordinatındaki kutuya yazar (döndürülmüş sayfada da doğru yerde, düz okunur)."""
-    page.insert_textbox(gorunumden(page, x0, y0, x1, y1), metin, fontsize=boyut, fontname=YAZI_ADI,
-                        fontfile=YAZI_TIPI, color=renk, rotate=page.rotation, align=hiza)
+    while boyut >= 4:  # sığmazsa insert_textbox hiçbir şey yazmaz: sığana kadar küçült
+        if page.insert_textbox(gorunumden(page, x0, y0, x1, y1), metin, fontsize=boyut, fontname=YAZI_ADI,
+                               fontfile=YAZI_TIPI, color=renk, rotate=page.rotation, align=hiza) >= 0:
+            return
+        boyut -= 1
+    raise ValueError(f"“{metin[:40]}” sayfa kenarına sığmıyor; daha kısa yazın.")
 
 
 def ust_alt_bilgi(doc, sayfalar=None, filigran="", ust="", alt="", numara="", boyut=10, filigran_opaklik=0.15):
@@ -977,6 +983,7 @@ def excele(doc, yol, sayfalar=None):
     """Sayfalardaki tabloları Excel'e aktarır (her PDF sayfası bir çalışma sayfası). Tablo bulunamayan sayfada
     yazılar satır satır, aralarındaki geniş boşluklardan sütunlara bölünerek yazılır. Yazılan satır sayısını döner."""
     from openpyxl import Workbook
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
     from openpyxl.utils import get_column_letter
     kitap = Workbook()
     kitap.remove(kitap.active)
@@ -998,7 +1005,11 @@ def excele(doc, yol, sayfalar=None):
                     onceki = k
                 satirlar.append(hucreler)
         for r in satirlar:
-            sayfa.append([hucre_degeri(h) for h in r])
+            # bozuk yazı tipi eşlemesindeki kontrol karakterlerini Excel kabul etmez, tüm aktarımı durdururdu
+            sayfa.append([hucre_degeri(ILLEGAL_CHARACTERS_RE.sub("", h)) for h in r])
+            for h in sayfa[sayfa.max_row]:
+                if isinstance(h.value, str) and h.value.startswith("="):
+                    h.data_type = "s"  # PDF'teki "=..." yazısı Excel'de çalışan formül olmasın (güvenlik)
         toplam += sum(1 for r in satirlar if r)
         for c, sutun in enumerate(sayfa.columns, start=1):  # sütun genişliği içeriğe göre
             sayfa.column_dimensions[get_column_letter(c)].width = min(60, max((len(str(h.value or "")) for h in sutun),
@@ -1007,12 +1018,88 @@ def excele(doc, yol, sayfalar=None):
     return toplam
 
 
+YAZIYA_BAGLI = {"Highlight", "Underline", "StrikeOut", "Squiggly"}  # yazının üstünde durur, taşınmaz
+
+
+def isaret_bul(page, nokta):
+    """PDF koordinatındaki noktadaki en üstteki işaret (not, şekil, kalem, vurgu...). Yoksa None."""
+    bulunan = None
+    for a in page.annots():
+        if a.type[1] != "Popup" and (a.rect + (-3, -3, 3, 3)).contains(nokta):  # Popup: notun görünmez kutusu
+            bulunan = a.xref
+    return bulunan
+
+
+def isareti_tasi(page, xref, dx, dy):
+    """İşareti dx, dy (PDF birimi) kadar taşır; rengi, kalınlığı, ok uçları, saydamlığı, yazarı korunur.
+    Kalem ve çizgi işaretlerinin kutusu değiştirilemez: noktaları kaydırılmış olarak yeniden oluşturulur.
+    İşaretin (yeni) xref'ini döner."""
+    a = page.load_annot(xref)
+    tur = a.type[1]
+    if tur in YAZIYA_BAGLI:
+        raise ValueError("Vurgu / altını çizme / üstünü çizme yazıya bağlıdır, taşınamaz (silinebilir).")
+    if tur not in ("Ink", "Line", "Polygon", "PolyLine"):
+        a.set_rect(a.rect + (dx, dy, dx, dy))
+        a.update()
+        return xref
+    v, renk, kalinlik = a.vertices, a.colors, a.border.get("width", 1)
+    uclar, opaklik, bilgi = a.line_ends, a.opacity, a.info
+    kay = lambda p: (p[0] + dx, p[1] + dy)
+    # önce yenisi: oluşturma hata verirse eski işaret kaybolmasın
+    if tur == "Ink":
+        yeni = page.add_ink_annot([[kay(p) for p in kol] for kol in v])
+    elif tur == "Line":
+        yeni = page.add_line_annot(kay(v[0]), kay(v[1]))
+    else:
+        yeni = getattr(page, f"add_{tur.lower()}_annot")([kay(p) for p in v])
+    page.delete_annot(page.load_annot(xref))
+    yeni.set_colors(stroke=renk.get("stroke"), fill=renk.get("fill") or None)
+    yeni.set_border(width=kalinlik)
+    if uclar and tur != "Ink":
+        yeni.set_line_ends(*uclar)
+    if opaklik is not None and opaklik >= 0:
+        yeni.set_opacity(opaklik)
+    yeni.set_info(bilgi)
+    yeni.update()
+    return yeni.xref
+
+
+def belge_satirlari(doc):
+    """[(sayfa, satır metni)] — sayfada göründüğü sırayla, boşluklar sadeleştirilmiş."""
+    return [(i, " ".join(k[4] for k in satir)) for i, s in enumerate(doc)
+            for satir in kelimeleri_satirla(s.get_text("words"))]
+
+
+def karsilastir(eski, yeni):
+    """İki belgenin yazısını satır satır karşılaştırır. [(tür, sayfa, metin)] döner:
+    tür '-' eskide olup yenide olmayan (sayfa eski belgede), '+' yenide eklenen (sayfa yeni belgede)."""
+    a, b = belge_satirlari(eski), belge_satirlari(yeni)
+    farklar = []
+    for tur, i1, i2, j1, j2 in difflib.SequenceMatcher(None, [m for _, m in a], [m for _, m in b],
+                                                        autojunk=False).get_opcodes():
+        if tur != "equal":
+            farklar += [("-", s, m) for s, m in a[i1:i2]] + [("+", s, m) for s, m in b[j1:j2]]
+    return farklar
+
+
+class KayitHatasi(Exception):
+    """Kayıt yarıda kaldı ama belge kurtarıldı: .belge açık belgenin yerine kullanılmalı."""
+    belge = None
+
+
 def kaydet_ve_ac(doc, yol, sifre=None, **ayar):
     """Kaydeder ve kaydedilen dosyayı açık belge olarak döner."""
     gecici = guvenli_kaydet(doc, yol, **ayar)
     doc.close()
     if gecici:  # açık dosyanın üstüne: belge kapandı, artık yerine konabilir
-        os.replace(gecici, yol)
+        try:
+            os.replace(gecici, yol)
+        except OSError as e:  # dosya başka programda açık: belge kaybolmasın, geçici kopyadan geri açılır
+            with open(gecici, "rb") as f:
+                hata = KayitHatasi(f"{yol} başka bir program tarafından kullanılıyor, üstüne yazılamadı ({e}).\n\n"
+                                   f"Değişiklikleriniz kaybolmadı; açık kalıyor ve şu dosyada da duruyor:\n{gecici}")
+                hata.belge = goruntuden_ac(f.read(), sifre)
+            raise hata
     yeni = pymupdf.open(yol)
     if yeni.needs_pass and sifre:
         yeni.authenticate(sifre)

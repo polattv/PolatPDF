@@ -17,8 +17,10 @@ KUCUK_EN = 130        # küçük resim genişliği
 GECMIS_SINIRI = 300 * 1024 * 1024  # geri al için en fazla bu kadar bellek
 AYAR_KLASORU = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "PDFDuzenleyici")
 SON_YOLU = os.path.join(AYAR_KLASORU, "son_acilanlar.json")
+IMZA_YOLU = os.path.join(AYAR_KLASORU, "imza.png")
 
-IPUCU = {"sec": "Seç: bir notun / işaretin üstüne tıklayın; içeriğini görün, düzenleyin ya da silin.",
+IPUCU = {"sec": "Seç: nota tıklayınca içeriği açılır. Şekli / kalem çizimini / oku sürükleyerek taşıyın; "
+                "tıklayıp Delete ile silin.",
          "yazi": "Yazı: yazının gideceği yere tıklayın (ya da kutu çizin).",
          "not": "Not: yapışkan notun gideceği yere tıklayın.",
          "vurgu": "Vurgula: vurgulanacak yazının üstünden fareyle kutu çizin.",
@@ -34,7 +36,8 @@ IPUCU = {"sec": "Seç: bir notun / işaretin üstüne tıklayın; içeriğini g�
                     "metni değiştir · boş yerden kutu çiz = çoklu seçim · oklar = kaydır · Delete = sil",
          "degistir": "Beyazla + yaz: kutu çizin; alan beyazla kapatılıp yerine yeni yazı yazılır (taranmış belgeler için).",
          "karart": "Karart: KALICI silinecek alanı çizin (yazı, resim, not, form alanı — geri getirilemez).",
-         "form": "Form alanı: yeni alanın kutusunu çizin."}
+         "form": "Form alanı: yeni alanın kutusunu çizin.",
+         "imza": "İmzam: imzanın gideceği yere tıklayın (ya da kutu çizin). İmzayı değiştirmek: Belge → İmzamı değiştir."}
 DAMGALAR = ["ÖDENDİ", "ONAYLANDI", "REDDEDİLDİ", "GİZLİDİR", "TASLAK", "ASLI GİBİDİR", "KOPYADIR"]
 HIZALAR = {"Sola": 0, "Ortala": 1, "Sağa": 2, "İki yana": 3}
 NOKTA_ARACLARI = {"yazi", "not", "sec", "duzenle"}  # tek tıklama yeterli
@@ -73,6 +76,7 @@ class Uygulama:
         self.doc = self.yol = self.sifre = None
         self.sayfa, self.zoom, self.img = 0, 1.3, None
         self.secili_sayfalar, self.ustune_onayli = set(), False  # küçük resimlerde Ctrl/Shift ile seçilenler
+        self.mesgul = False  # arka plan işi belgeyi kullanırken True: ana pencere belgeye dokunmaz
         # sürekli görünüm: sayfalar alt alta; ustler[i] sayfanın tuvaldeki üst kenarı, ust o anki sayfanınki
         self.surekli, self.ustler, self.boyutlar, self.resimler, self.ust, self.icerik = True, {}, {}, {}, KENAR, None
         self.degisti, self.mod, self.bas, self.kutu = False, None, None, None
@@ -87,6 +91,7 @@ class Uygulama:
         self.boyut = tk.IntVar(value=11)
         self.hiza = tk.StringVar(value="Sola")
         self.sayfa_yazi, self.zoom_yazi = tk.StringVar(), tk.StringVar(value="%130")
+        self.surekli_var = tk.BooleanVar(value=True)
         self.arama = tk.StringVar()
         self.arayuzu_kur()
         self.bilgi("PDF açmak için 📂 Aç (Ctrl+O) ya da dosyayı pencereye sürükleyin. "
@@ -111,6 +116,7 @@ class Uygulama:
         dosya.add_command(label="Resimlerden PDF oluştur…", command=self.resimlerden_pdf)
         dosya.add_command(label="Birleştir…", command=self.birlestir_penceresi)
         dosya.add_command(label="Böl…", command=self.bol_penceresi)
+        dosya.add_command(label="Başka bir PDF ile karşılaştır…", command=self.karsilastir)
         self.donustur_menu = tk.Menu(dosya, tearoff=0)
         self.donustur_menu.add_command(label="Word'e (.docx)…", command=lambda: self.disa_aktar("word"))
         self.donustur_menu.add_command(label="PowerPoint'e (.pptx)…", command=lambda: self.disa_aktar("powerpoint"))
@@ -142,6 +148,14 @@ class Uygulama:
         guv.add_command(label="Şifre koy…", command=self.sifre_koy)
         guv.add_command(label="Şifreyi kaldır…", command=self.sifre_kaldir)
         menu.add_cascade(label="Güvenlik", menu=guv)
+        gorunum = tk.Menu(menu, tearoff=0)
+        self.tema_var = tk.StringVar(value="acik" if tema.ACIK else "koyu")
+        for deger, yazi in (("koyu", "Koyu tema"), ("acik", "Açık tema")):
+            gorunum.add_radiobutton(label=yazi, value=deger, variable=self.tema_var, command=self.tema_degistir)
+        gorunum.add_separator()
+        gorunum.add_checkbutton(label="Sürekli kaydırma", variable=self.surekli_var, command=self.gorunum_degisti)
+        gorunum.add_command(label="Tam ekran", accelerator="F11", command=self.tam_ekran)
+        menu.add_cascade(label="Görünüm", menu=gorunum)
         yardim = tk.Menu(menu, tearoff=0)
         yardim.add_command(label="Güncellemeleri denetle", command=self.guncelle)
         yardim.add_command(label=f"Sürüm {guncelleme.yerel_surum()}", state="disabled")
@@ -180,7 +194,6 @@ class Uygulama:
         zmenu.add_command(label="Genişliğe sığdır", accelerator="Ctrl+2", command=lambda: self.sigdir("genislik"))
         zmenu.add_command(label="Gerçek boyut (%100)", accelerator="Ctrl+1", command=lambda: self.yakinlik(1))
         zmenu.add_separator()
-        self.surekli_var = tk.BooleanVar(value=True)
         zmenu.add_checkbutton(label="Sürekli kaydırma (sayfalar alt alta)", variable=self.surekli_var,
                               command=self.gorunum_degisti)
         zmenu.add_separator()
@@ -270,6 +283,7 @@ class Uygulama:
         t.bind("<Double-Button-1>", self.duzenle_cift)
         t.bind("<Configure>", self.ortala)  # pencere büyüyünce / tam ekranda yeniden ortala
         t.bind("<MouseWheel>", self.tekerlek_)
+        t.bind("<Button-3>", self.tuval_menusu)
         t.bind("<Control-MouseWheel>", lambda e: self.yakinlas(1.1 if e.delta > 0 else 1 / 1.1))
         k.bind("<MouseWheel>", lambda e: k.yview_scroll(-1 if e.delta > 0 else 1, "units"))
         k.bind("<ButtonPress-1>", self.kucuk_bas)
@@ -316,7 +330,7 @@ class Uygulama:
         dis.bind("<Enter>", lambda e: dis.bind_all("<MouseWheel>", tekerlek))  # yalnız fare panelin üstündeyken
         def cik(e):  # düğmenin üstüne geçmek de "Leave" sayılır: fare gerçekten panelden çıktıysa kapat
             w = dis.winfo_containing(e.x_root, e.y_root)
-            if not (w and str(w).startswith(str(dis))):
+            if not (w and (str(w) == str(dis) or str(w).startswith(str(dis) + "."))):
                 dis.unbind_all("<MouseWheel>")
         dis.bind("<Leave>", cik)
         self.mod_dugmeleri = {}
@@ -347,12 +361,15 @@ class Uygulama:
                              (lambda: self.dondur(90), "dondur", "Sağa döndür"),
                              (lambda: self.dondur(270), "sola_dondur", "Sola döndür"),
                              (self.sayfalari_cikar, "cikar", "Sayfaları çıkar"), (self.bos_sayfa, "bos", "Boş sayfa"),
-                             (self.ust_alt_penceresi, "filigran", "Filigran / No"), (self.sil, "sil", "Sayfaları sil")])
+                             (self.ust_alt_penceresi, "filigran", "Filigran / No"), (self.sil, "sil", "Sayfaları sil"),
+                             (self.karsilastir, "karsilastir", "Karşılaştır")])
         grup("Yorum ve işaret", [("sec", "sec", "Seç"), ("not", "not", "Not"), ("vurgu", "vurgu", "Vurgula"),
                                  ("alti", "alti", "Altını çiz"), ("ustu", "ustu", "Üstünü çiz"),
                                  ("kalem", "kalem", "Kalem"), ("dikdortgen", "dikdortgen", "Dikdörtgen"),
                                  ("daire", "daire", "Daire"), ("cizgi", "cizgi", "Çizgi"), ("ok", "ok", "Ok")])
-        grup("Belge", [(self.ocr, "ocr", "Yazı tanı (OCR)"), ("damga", "damga", "Damga"),("resim", "resim", "Resim / İmza"), ("form", "form", "Form alanı"),
+        grup("Belge", [(self.ocr, "ocr", "Yazı tanı (OCR)"), ("imza", "imza", "İmzam"),
+                       (self.imza_penceresi, "kalem", "İmzamı değiştir"), ("damga", "damga", "Damga"),
+                       ("resim", "resim", "Resim ekle"), ("form", "form", "Form alanı"),
                        (self.form_penceresi, "doldur", "Formu doldur"), ("karart", "karart", "Karart"),
                        (self.bulunanlari_karart, "her_yerde", "Her yerde")])
 
@@ -452,14 +469,15 @@ class Uygulama:
     def gorunenleri_ciz(self):
         """Yalnızca ekranda (ve bir ekran yakınında) görünen sayfaları çizer; uzaktakileri bellekten atar.
         Böylece yüzlerce sayfalık belgede de sürekli görünüm hızlı ve az bellekle çalışır."""
-        if not self.doc or not self.ustler:
+        if not self.doc or not self.ustler or self.mesgul:
             return
         t, z = self.tuval, self.zoom
         boy = max(t.winfo_height(), 200)
         ust, alt = t.canvasy(0) - boy, t.canvasy(boy) + boy
         for i, u in self.ustler.items():
             gorunur = u < alt and u + self.boyutlar[i][1] > ust
-            if gorunur and i not in self.resimler:
+            # (resim, None): yalnızca ölçü için tutulan, tuvale konmamış resim — görününce çizilmeli
+            if gorunur and (i not in self.resimler or self.resimler[i][1] is None):
                 pix = self.doc[i].get_pixmap(matrix=pymupdf.Matrix(z, z), annots=True)
                 im = tk.PhotoImage(data=pix.tobytes("ppm"))  # referans tutulmazsa resim kaybolur
                 oge = t.create_image(KENAR, u, image=im, anchor="nw", tags=("sayfa_resmi",))
@@ -476,7 +494,7 @@ class Uygulama:
         """Tuval kaydırıldıkça: yeni görünen sayfaları çiz; sürekli görünümde ortadaki sayfa 'o anki sayfa' olsun
         (sayaç ve küçük resim seçimi ona göre)."""
         self.kaydirma_bekliyor = False
-        if not self.doc or not self.ustler:
+        if not self.doc or not self.ustler or self.mesgul:
             return
         self.gorunenleri_ciz()
         # sürüklerken ya da seçim varken sayfa değişmesin (kaydırınca seçim kaybolmasın)
@@ -583,6 +601,9 @@ class Uygulama:
         y = [8]
 
         def parca(i):
+            if self.mesgul:  # arka plan işi belgeyi kullanıyor: sonra devam et
+                self.kucuk_is = self.pen.after(200, parca, i)
+                return
             for i in range(i, min(i + 8, self.doc.page_count)):
                 s = self.doc[i]
                 o = KUCUK_EN / s.rect.width
@@ -591,7 +612,7 @@ class Uygulama:
                 self.kucukler.append(im)
                 self.kucuk_y.append(y[0])
                 k.create_image(15, y[0], image=im, anchor="nw", tags=(f"k{i}",))
-                k.create_text(15 + KUCUK_EN / 2, y[0] + pix.height + 9, text=str(i + 1), fill="white")
+                k.create_text(15 + KUCUK_EN / 2, y[0] + pix.height + 9, text=str(i + 1), fill=tema.YAZI)
                 y[0] += pix.height + 26
             k.configure(scrollregion=(0, 0, KUCUK_EN + 30, y[0]))
             self.kucuk_secimi()
@@ -660,13 +681,14 @@ class Uygulama:
         if i == j:
             self.git(i)
         else:
+            self.secili_sayfalar = set()  # sıra değişti: eski seçim başka sayfaları gösterirdi
             self.degisiklik(lambda: setattr(self, "sayfa", pi.konuma_tasi(self.doc, i, j)), sayfalar=True)
             self.bilgi(f"{i + 1}. sayfa {j + 1}. sıraya taşındı.")
 
     # ---------- değişiklik, geri al ----------
     def degisiklik(self, islem, sayfalar=False):
         """Belgeyi değiştiren her işlem buradan geçer: önce geri al için kopya alınır."""
-        once = pi.anlik_goruntu(self.doc)
+        once, sayi = pi.anlik_goruntu(self.doc), self.doc.page_count
         try:
             islem()
         except Exception as e:
@@ -679,12 +701,19 @@ class Uygulama:
         self.ileri.clear()
         self.degisti = True
         self.bulunan = []  # sayfalar değişmiş olabilir; eski arama sonuçları yanlış yeri gösterir
+        if self.doc.page_count != sayi:  # sayfa numaraları kaydı: eski seçim yanlış sayfaları gösterir
+            self.secili_sayfalar = set()
         self.ciz()
         if sayfalar:
             self.kucukleri_ciz()
+            self.yer_imleri_yenile()
         else:
             self.kucuk_yenile(self.sayfa)
         return True
+
+    def yer_imleri_yenile(self):
+        if self.yer_agaci.winfo_ismapped():
+            self.yer_imlerini_doldur()
 
     def kucuk_yenile(self, i):
         if i >= len(self.kucuk_y) or self.kucuk_is:  # henüz çizilmemiş: baştan çiz
@@ -699,7 +728,7 @@ class Uygulama:
 
     def geri_yukle(self, veri):
         self.secili, self.secili_resim = [], None  # eski belgenin seçimi, yeni belgede yanlış yeri gösterir
-        self.secili_sayfalar = set()
+        self.secili_sayfalar, self.isaret = set(), None
         eski = self.doc
         self.doc = pi.goruntuden_ac(veri, self.sifre)
         eski.close()
@@ -714,6 +743,7 @@ class Uygulama:
         self.degisti, self.bulunan = True, []
         self.ciz()
         self.kucukleri_ciz()
+        self.yer_imleri_yenile()
         self.bilgi(f"Geri alındı. ({len(self.gecmis)} adım daha geri alınabilir)")
 
     def ileri_al(self):
@@ -726,6 +756,7 @@ class Uygulama:
         self.degisti, self.bulunan = True, []
         self.ciz()
         self.kucukleri_ciz()
+        self.yer_imleri_yenile()
         self.bilgi("İleri alındı.")
 
     # ---------- dosya ----------
@@ -781,9 +812,16 @@ class Uygulama:
         yeni_sifre = ayar.get("user_pw") if "encryption" in ayar else self.sifre
         try:
             self.doc = pi.kaydet_ve_ac(self.doc, yol, yeni_sifre, **ayar)
+        except pi.KayitHatasi as e:  # belge kurtarıldı: değişiklikler açık kalır, dosya değişmedi
+            self.doc = e.belge
+            self.ciz()
+            messagebox.showerror("Kaydedilemedi", str(e))
+            return False
         except Exception as e:
             messagebox.showerror("Kaydedilemedi", f"{e}\n\nDosya değiştirilmedi.")
             return False
+        if "encryption" in ayar:  # geri al kopyaları eski şifre durumunda: geri alıp kaydetmek şifreyi bozardı
+            self.gecmis, self.ileri = [], []
         self.yol, self.degisti, self.sifre = yol, False, yeni_sifre
         son_acilana_ekle(yol)
         self.ciz()
@@ -846,6 +884,7 @@ class Uygulama:
     def tam_ekran(self):
         """F11 / Esc: menü, araç çubuğu, yan paneller ve kaydırma çubukları gizlenir; yalnızca sayfa kalır."""
         self.tam = not self.tam
+        self.pen.unbind_all("<MouseWheel>")  # sağ panelin tekerlek bağı tam ekranda takılı kalmasın
         if self.tam:  # kullanıcının ayarladığı yan panel genişlikleri
             self.genislikler = {w: w.winfo_width() for w, _ in self.gizlenenler if w.winfo_manager() == "panedwindow"}
         self.pen.attributes("-fullscreen", self.tam)
@@ -867,6 +906,7 @@ class Uygulama:
 
     def sutun_ac_kapa(self, w, dugme, gizle_simgesi, goster_simgesi):
         """Sol (küçük resimler) ya da sağ (araçlar) sütunu gizler / geri getirir; ok düğmesinin yönü de döner."""
+        self.pen.unbind_all("<MouseWheel>")  # fare panelin üstündeyken gizlenirse "Leave" gelmez: bağ kalmasın
         if w in self.kapali_sutunlar:
             self.kapali_sutunlar.discard(w)
             dict(self.gizlenenler)[w]()
@@ -920,6 +960,10 @@ class Uygulama:
         if self.surekli and self.icerik:
             self.tuval.yview_moveto((self.ust - KENAR) / self.icerik[1])
             self.gorunenleri_ciz()
+
+    def tema_degistir(self):
+        tema.ayar_yaz(tema=self.tema_var.get())
+        messagebox.showinfo("Tema", "Tema kaydedildi. Polat PDF kapatılıp yeniden açılınca geçerli olur.")
 
     def gorunum_degisti(self):
         self.surekli = self.surekli_var.get()
@@ -1237,15 +1281,23 @@ class Uygulama:
         cubuk.pack(pady=(8, 0))
         cubuk.start(12)
         w.grab_set()
+        w.focus_force()  # tuşlar ana pencereye gitmesin (Ctrl+Z / Ctrl+S iş sürerken belgeyi kapatırdı)
         self.pen.config(cursor="watch")
+        # PyMuPDF aynı anda iki iş parçacığından kullanılamaz: iş bitene kadar ana pencere belgeye dokunmaz
+        # (çizim, küçük resimler, kaydırma mesgul'e bakıp bekler)
+        self.mesgul = True
         t = threading.Thread(target=calis, daemon=True)
         t.start()
-        while t.is_alive():
-            yazi.config(text=f"{mesaj} {self.ilerleme}")
-            self.pen.update()
-            time.sleep(0.03)
+        try:
+            while t.is_alive():
+                yazi.config(text=f"{mesaj} {self.ilerleme}")
+                self.pen.update()
+                time.sleep(0.03)
+        finally:
+            self.mesgul = False
         self.pen.config(cursor="")
         w.destroy()
+        self.gorunenleri_ciz()  # iş sürerken pencere boyutu / kaydırma değiştiyse ekranı tamamla
         if hata:
             self.bilgi("İşlem tamamlanamadı.")
             if firlat:  # çağıran (ör. degisiklik) belgeyi eski haline getirip hatayı kendisi göstersin
@@ -1389,6 +1441,95 @@ class Uygulama:
         if yollar and messagebox.askyesno("Kaydedildi", f"{len(yollar)} resim kaydedildi.\n\nKlasör açılsın mı?"):
             os.startfile(klasor)
 
+    def karsilastir(self):
+        """Açık belgeyi başka bir PDF ile (ör. proformanın iki sürümü) satır satır karşılaştırır."""
+        if not self.belge_var():
+            return
+        yol = filedialog.askopenfilename(title="Karşılaştırılacak (yeni) PDF", filetypes=[("PDF", "*.pdf")],
+                                         initialdir=os.path.dirname(self.yol))
+        if not yol:
+            return
+        try:
+            diger = pymupdf.open(yol)
+        except Exception as e:
+            return messagebox.showerror("Karşılaştır", str(e))
+        if diger.needs_pass:
+            s = simpledialog.askstring("Şifre", "Bu PDF şifreli. Şifreyi girin:", show="*", parent=self.pen)
+            if not s or not diger.authenticate(s):
+                return messagebox.showerror("Karşılaştır", "Şifre yanlış.")
+        farklar = self.arkaplanda("Karşılaştırılıyor…", lambda: pi.karsilastir(self.doc, diger))
+        if farklar is None:
+            return
+        diger.close()
+        if farklar is True or not farklar:
+            return messagebox.showinfo("Karşılaştır", "Yazı farkı yok: iki belgenin yazıları aynı.\n\n"
+                                                      "(Resimler, imzalar, renkler karşılaştırılmaz.)")
+        # açık belgede değişen / silinen satırları turuncu çerçevele (arama sonuçları gibi)
+        self.bulunan, self.bul_i = [(s, r) for t, s, m in farklar if t == "-"
+                                    for r in self.doc[s].search_for(m)[:1]], -1
+        self.ciz()
+        w = tk.Toplevel(self.pen, padx=10, pady=10)
+        w.title(f"Karşılaştırma — {os.path.basename(self.yol)} ↔ {os.path.basename(yol)}")
+        w.geometry("720x520")
+        silinen, eklenen = sum(t == "-" for t, _, _ in farklar), sum(t == "+" for t, _, _ in farklar)
+        tk.Label(w, text=f"Kırmızı (−): yalnızca açık belgede ({silinen} satır) · Yeşil (+): yalnızca "
+                         f"{os.path.basename(yol)} içinde ({eklenen} satır). Kırmızı satıra tıklayınca o sayfaya gidilir.",
+                 fg=tema.YAZI2, wraplength=690, justify="left").pack(anchor="w", pady=(0, 6))
+        m = tk.Text(w, wrap="word", bg=tema.YUZEY2, fg=tema.YAZI, bd=0, font=("Consolas", 10), cursor="arrow")
+        m.pack(fill="both", expand=True)
+        m.tag_configure("-", foreground=tema.FARK_EKSI)
+        m.tag_configure("+", foreground=tema.FARK_ARTI)
+        for n, (t, s, metin) in enumerate(farklar):
+            m.insert("end", f"{t} s.{s + 1:<4} {metin}\n", (t, f"f{n}"))
+            if t == "-":
+                m.tag_bind(f"f{n}", "<Button-1>", lambda e, s=s: self.git(s))
+        m.config(state="disabled")
+        self.bilgi(f"Karşılaştırma: {silinen} satır değişmiş/silinmiş (turuncu çerçeveli), {eklenen} satır eklenmiş.")
+
+    def tuval_menusu(self, e):
+        """Sayfada sağ tık: o anki duruma göre kopyala/yapıştır, buraya ekle, sayfa ve görünüm işleri."""
+        if not self.doc:
+            return
+        t = self.tuval
+        cx, cy = t.canvasx(e.x), t.canvasy(e.y)
+        self.sayfayi_sec(cy)
+        s = self.doc[self.sayfa]
+        p = ((cx - KENAR) / self.zoom, (cy - self.ust) / self.zoom)  # görünen sayfa koordinatı
+        m = tk.Menu(self.pen, tearoff=0)
+        if getattr(self, "secili_metin", "") or (self.mod == "duzenle" and self.secili):
+            m.add_command(label="Kopyala", accelerator="Ctrl+C", command=self.kopyala)
+        if getattr(self, "pano", None):
+            m.add_command(label="Buraya yapıştır", accelerator="Ctrl+V", command=lambda: self.yapistir((e.x, e.y)))
+        if self.mod == "duzenle" and self.secim_var():
+            m.add_command(label="Seçileni sil", accelerator="Delete", command=self.secilileri_sil)
+        if m.index("end") is not None:
+            m.add_separator()
+
+        def yazi():
+            metin = simpledialog.askstring("Yazı ekle", "Yazılacak metin:", parent=self.pen)
+            if metin:
+                g = s.rect
+                self.degisiklik(lambda: pi.yazi_ekle(s, pi.gorunumden(s, p[0], p[1], g.width - 20, g.height - 20),
+                                                     metin, self.boyut.get(), hiza=HIZALAR[self.hiza.get()]))
+
+        def not_():
+            metin = simpledialog.askstring("Not ekle", "Not:", parent=self.pen)
+            if metin:
+                self.degisiklik(lambda: pi.not_ekle(s, pi.noktadan(s, *p), metin))
+
+        m.add_command(label="Buraya yazı ekle…", command=yazi)
+        m.add_command(label="Buraya not ekle…", command=not_)
+        m.add_command(label="Buraya imzamı koy", command=lambda: self.imza_koy(s, p[0], p[1], None))
+        m.add_separator()
+        m.add_command(label="Sayfayı sağa döndür", command=lambda: self.dondur(90))
+        m.add_command(label="Sayfayı sola döndür", command=lambda: self.dondur(270))
+        m.add_command(label="Sayfaya sığdır", accelerator="Ctrl+0", command=lambda: self.sigdir("sayfa"))
+        m.add_command(label="Genişliğe sığdır", accelerator="Ctrl+2", command=lambda: self.sigdir("genislik"))
+        m.add_command(label="Tam ekran", accelerator="F11", command=self.tam_ekran)
+        m.add_separator()
+        m.add_command(label="Yazdır…", accelerator="Ctrl+P", command=self.yazdir_penceresi)
+        m.tk_popup(e.x_root, e.y_root)
+
     def disa_aktar(self, tur):
         """Açık belgeyi (kaydedilmemiş değişiklikleriyle) Word ya da PowerPoint dosyasına çevirir."""
         if not self.belge_var():
@@ -1406,8 +1547,8 @@ class Uygulama:
                                            initialdir=os.path.dirname(self.yol))
         if not yol:
             return
-        if not self.arkaplanda(f"{ad} dosyası hazırlanıyor{not_}…", lambda: islev(self.doc, yol)):
-            return
+        if self.arkaplanda(f"{ad} dosyası hazırlanıyor{not_}…", lambda: islev(self.doc, yol)) is None:
+            return  # hata gösterildi (0 satırlık Excel de kaydedilmiş sayılır)
         self.bilgi(f"Kaydedildi: {yol}")
         if messagebox.askyesno("Dönüştürüldü", f"{os.path.basename(yol)} kaydedildi.\n\nAçılsın mı?"):
             os.startfile(yol)
@@ -1580,6 +1721,14 @@ class Uygulama:
 
     def secim_ciz(self):
         self.tuval.delete("secili")
+        i = getattr(self, "isaret", None)
+        if i and self.doc and i["sayfa"] == self.sayfa:  # Seç aracında seçili not / şekil
+            try:
+                s = self.doc[self.sayfa]
+                self.tuval.create_rectangle(*self.kanvas_kutusu(s, s.load_annot(i["xref"]).rect), outline=tema.VURGU,
+                                            width=2, dash=(5, 3), tags=("secili",))
+            except Exception:
+                self.isaret = None  # işaret artık yok (geri alındı / silindi)
         self.secim_bilgisi()
         if not (self.secim_var() and self.doc):
             return
@@ -1600,13 +1749,22 @@ class Uygulama:
 
     def secimi_birak(self):
         self.secili, self.secili_resim, self.tasima, self.olcekleme = [], None, None, None
+        self.isaret = None
         self.secim_ciz()
 
     def odak_yazida(self):
         return isinstance(self.pen.focus_get(), (tk.Entry, tk.Spinbox))
 
     def secilileri_sil(self):
-        if not self.secim_var() or self.odak_yazida():
+        if self.odak_yazida():
+            return
+        i = getattr(self, "isaret", None)
+        if self.mod == "sec" and i and i["sayfa"] == self.sayfa:
+            s, self.isaret = self.doc[self.sayfa], None
+            if self.degisiklik(lambda: s.delete_annot(s.load_annot(i["xref"]))):
+                self.bilgi("İşaret silindi. Geri almak için Ctrl+Z.")
+            return
+        if not self.secim_var():
             return
         s, sec, resim = self.doc[self.sayfa], self.secili, self.secili_resim
         self.secili, self.secili_resim = [], None
@@ -1670,12 +1828,13 @@ class Uygulama:
         self.pen.clipboard_append("\n".join(pi.satir_metni(l) for l in self.pano).replace("\xa0", " "))
         self.bilgi(f"{len(self.pano)} satır kopyalandı. Ctrl+V ile farenin olduğu yere yapıştırın.")
 
-    def yapistir(self):
-        """Kopyalanan satırları fare sayfanın üstündeyse oraya, değilse biraz kaydırarak yapıştırır."""
+    def yapistir(self, nokta=None):
+        """Kopyalanan satırları fare sayfanın üstündeyse oraya, değilse biraz kaydırarak yapıştırır.
+        nokta: tuval üzerindeki (x, y) — sağ tık menüsünden, menü açılmadan önceki fare yeri."""
         if self.odak_yazida() or not self.doc or not getattr(self, "pano", None):
             return
         s, sec, t = self.doc[self.sayfa], self.pano, self.tuval
-        cx, cy = t.winfo_pointerx() - t.winfo_rootx(), t.winfo_pointery() - t.winfo_rooty()
+        cx, cy = nokta or (t.winfo_pointerx() - t.winfo_rootx(), t.winfo_pointery() - t.winfo_rooty())
         if 0 <= cx < t.winfo_width() and 0 <= cy < t.winfo_height():
             self.sayfayi_sec(t.canvasy(cy))  # sürekli görünümde farenin altındaki sayfaya yapıştır
             s = self.doc[self.sayfa]
@@ -1826,6 +1985,8 @@ class Uygulama:
             return self.tuval.config(cursor="hand2" if self.baglanti_bul(*self.nokta(e)) else "xterm")
         if self.mod != "duzenle" or not self.doc or self.tasima or self.olcekleme:
             return
+        if not self.secim_var():  # sürekli görünümde farenin altındaki sayfanın satırları vurgulansın
+            self.sayfayi_sec(self.nokta(e)[1])
         if self.tutamacta_mi(self.nokta(e)):
             return self.tuval.config(cursor="size_nw_se")
         s, p = self.doc[self.sayfa], self.pdf_noktasi(e)
@@ -1844,6 +2005,8 @@ class Uygulama:
         self.secili_metin = ""
         if self.mod == "duzenle":
             return self.tasi_bas(e)
+        if self.mod == "sec":
+            return self.isaret_bas(e)
         self.bas = self.nokta(e)
         if self.mod == "kalem":
             self.kalem_noktalari = [self.bas]
@@ -1858,6 +2021,8 @@ class Uygulama:
         n = self.nokta(e)
         if self.tasima or self.olcekleme:
             return self.tasi_surukle(n)
+        if self.mod == "sec":
+            return self.isaret_surukle(n)
         if not self.bas or not self.kutu:
             return
         if self.mod == "kalem":
@@ -1866,9 +2031,53 @@ class Uygulama:
         else:
             self.tuval.coords(self.kutu, *self.bas, *n)
 
+    # ---------- Seç aracı: notları, şekilleri, kalem çizimlerini seç / taşı / sil ----------
+    def isaret_bas(self, e):
+        s = self.doc[self.sayfa]
+        x = pi.isaret_bul(s, self.pdf_noktasi(e))
+        self.isaret = {"xref": x, "sayfa": self.sayfa, "bas": self.nokta(e)} if x else None
+        self.secim_ciz()
+        if not x:
+            self.bilgi("Burada not ya da işaret yok. (Form alanları için: Formu doldur)")
+
+    def isaret_surukle(self, n):
+        i = getattr(self, "isaret", None)
+        if not i or not i.get("bas"):
+            return
+        s = self.doc[self.sayfa]  # işaret sayfaya zayıf bağlı: sayfa nesnesi yaşamalı
+        x0, y0, x1, y1 = self.kanvas_kutusu(s, s.load_annot(i["xref"]).rect)
+        dx, dy = n[0] - i["bas"][0], n[1] - i["bas"][1]
+        self.tuval.delete("isaret_tasi")
+        self.tuval.create_rectangle(x0 + dx, y0 + dy, x1 + dx, y1 + dy, outline=tema.VURGU, width=2, dash=(4, 2),
+                                    tags=("isaret_tasi",))
+
+    def isaret_birak(self, e):
+        i = getattr(self, "isaret", None)
+        self.tuval.delete("isaret_tasi")
+        if not i or not i.get("bas"):
+            return
+        s, (bx, by), (nx, ny) = self.doc[self.sayfa], i.pop("bas"), self.nokta(e)
+        tur = s.load_annot(i["xref"]).type[1]
+        if abs(nx - bx) + abs(ny - by) < 4:  # tıklama: not ise içeriğini aç, değilse seçili bırak
+            if tur == "Text":
+                self.isaret = None
+                self.secim_ciz()
+                return self.not_penceresi(s, self.pdf_noktasi(e))
+            return self.bilgi(f"İşaret seçildi ({tur}): sürükleyerek taşıyın, Delete ile silin.")
+        kx, ky = self.ekran_vektoru((nx - bx) / self.zoom, (ny - by) / self.zoom)
+        sonuc = []
+        if self.degisiklik(lambda: sonuc.append(pi.isareti_tasi(s, i["xref"], kx, ky))):
+            self.isaret = {"xref": sonuc[0], "sayfa": self.sayfa}
+            self.secim_ciz()
+            self.bilgi("İşaret taşındı. Geri almak için Ctrl+Z.")
+        else:
+            self.isaret = None
+
     def birak_(self, e):
         if self.mod == "duzenle":
             return self.tasi_birak(e)
+        if self.mod == "sec":
+            return self.isaret_birak(e)
         if not self.bas:
             return
         (cx0, cy0), (cx1, cy1), z = self.bas, self.nokta(e), self.zoom
@@ -1917,6 +2126,8 @@ class Uygulama:
             return
         if mod == "resim":
             return self.resim_koy(s, x0, y0, None if kucuk else kutu())
+        if mod == "imza":
+            return self.imza_koy(s, x0, y0, None if kucuk else kutu())
         if kucuk:
             return self.bilgi("Alan çok küçük; fareyi basılı tutup bir kutu çizin.")
         if mod in pi.ISARETLER:
@@ -1958,8 +2169,11 @@ class Uygulama:
         except Exception as e:
             return messagebox.showerror("Resim açılamadı", str(e))
         im = self.arka_plan_penceresi(im, ilk_ekleme=True)
-        if im is None:
-            return
+        if im is not None:
+            self.resmi_yerlestir(s, x, y, kutu, im)
+
+    def resmi_yerlestir(self, s, x, y, kutu, im):
+        """PIL resmini sayfaya koyar (kutu yoksa tıklanan yere doğal boyutunda) ve Düzenle aracında seçer."""
         en, boy = im.size
         if kutu is None:  # 96 dpi kabulüyle doğal boyut, sayfaya sığacak kadar
             g = s.rect
@@ -1974,6 +2188,81 @@ class Uygulama:
             self.resmi_sec(sonuc[0], kutu)
             self.bilgi("Resim eklendi. Sürükleyerek taşıyın, köşedeki kare ile büyütün/küçültün; "
                        "çift tıklayınca arka planı temizlenir.")
+
+    def imza_koy(self, s, x, y, kutu):
+        """Kayıtlı imzayı tıklanan yere (ya da çizilen kutuya) koyar; kayıtlı imza yoksa önce çizdirir."""
+        from PIL import Image
+        if not os.path.exists(IMZA_YOLU) and not self.imza_penceresi():
+            return
+        with Image.open(IMZA_YOLU) as im:
+            im = im.convert("RGBA")
+        if kutu is None:  # imza tıklanan yere, sayfa genişliğinin dörtte biri kadar
+            g = s.rect
+            en = g.width / 4
+            kutu = pi.gorunumden(s, x, y, x + en, y + en * im.height / im.width)
+        self.resmi_yerlestir(s, x, y, kutu, im)
+
+    def imza_penceresi(self):
+        """İmzayı fareyle çizdirir (ya da resimden alır) ve %APPDATA%'ya kaydeder. Kaydedildiyse True."""
+        from PIL import Image, ImageDraw, ImageOps
+        w = self.pencere("İmzam")
+        EN, BOY, K = 520, 200, 4  # K: pürüzsüz çizgi için büyük çizip küçült
+        tk.Label(w, text="İmzanızı fareyle (ya da kalemle) aşağıya atın. Bir kez kaydedilir, sonra "
+                         "“İmzam” aracıyla tek tıkla eklenir.", fg=tema.YAZI2).pack(anchor="w", pady=(0, 6))
+        c = tk.Canvas(w, width=EN, height=BOY, bg="white", highlightthickness=1, cursor="pencil")
+        c.pack()
+        cizgiler, sonuc = [], [False]
+
+        def bas(e):
+            cizgiler.append([(e.x, e.y)])
+
+        def surukle(e):
+            if cizgiler:
+                p = cizgiler[-1][-1]
+                cizgiler[-1].append((e.x, e.y))
+                c.create_line(*p, e.x, e.y, width=3, fill="#0a1f6b", capstyle="round", smooth=True)
+
+        c.bind("<ButtonPress-1>", bas)
+        c.bind("<B1-Motion>", surukle)
+
+        def kaydet_(im):
+            os.makedirs(AYAR_KLASORU, exist_ok=True)
+            im.save(IMZA_YOLU)
+            sonuc[0] = True
+            w.destroy()
+            self.bilgi("İmzanız kaydedildi. “İmzam” aracıyla sayfaya tıklayın.")
+
+        def kaydet():
+            if not any(len(ci) > 1 for ci in cizgiler):
+                return messagebox.showerror("İmzam", "Önce imzanızı çizin.", parent=w)
+            im = Image.new("RGBA", (EN * K, BOY * K), (0, 0, 0, 0))
+            d = ImageDraw.Draw(im)
+            for ci in cizgiler:
+                if len(ci) > 1:
+                    d.line([(x * K, y * K) for x, y in ci], fill=(10, 31, 107, 255), width=3 * K, joint="curve")
+            im = im.crop(im.getbbox())  # boş kenarları at
+            kaydet_(im.resize((max(1, im.width * 2 // K), max(1, im.height * 2 // K)), Image.LANCZOS))  # ekranın 2 katı
+
+        def dosyadan():
+            yol = filedialog.askopenfilename(parent=w, title="İmza resmi (taranmış ya da fotoğraf)",
+                                             filetypes=[("Resim", "*.png *.jpg *.jpeg *.bmp *.webp"), ("Tümü", "*.*")])
+            if not yol:
+                return
+            with Image.open(yol) as im:
+                im = ImageOps.exif_transpose(im).convert("RGBA")
+            im = self.arka_plan_penceresi(im, ilk_ekleme=True)  # kâğıdın beyazı şeffaf olsun
+            if im is not None:
+                kaydet_(im.crop(im.getbbox() or (0, 0, *im.size)))
+
+        alt = tk.Frame(w, pady=10)
+        alt.pack(fill="x")
+        tema.dugme(alt, None, "Temizle", lambda: (cizgiler.clear(), c.delete("all")), sol=False).pack(side="left")
+        tema.dugme(alt, "resim", "Resimden al…", dosyadan, sol=False).pack(side="left", padx=6)
+        tema.dugme(alt, None, "İptal", w.destroy, sol=False).pack(side="right")
+        tema.dugme(alt, "kaydet", "Kaydet", kaydet, sol=False).pack(side="right", padx=6)
+        w.grab_set()
+        w.wait_window()
+        return sonuc[0]
 
     def resim_arka_plani(self):
         """Seçili resmin arka planını temizler (önizlemeli pencereyle)."""
