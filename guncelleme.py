@@ -1,5 +1,5 @@
 """GitHub'daki (polattv/PolatPDF) son sürümü (Release) denetler; yeniyse kurulum dosyasını indirip sessizce çalıştırır."""
-import json, os, re, subprocess, sys, tempfile, urllib.request
+import glob, json, os, re, subprocess, sys, tempfile, urllib.request
 
 DEPO = "polattv/PolatPDF"
 SURUM_DOSYASI = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "surum.txt")
@@ -41,6 +41,15 @@ def acik_pencere_sayisi():
     cikti = subprocess.run(["tasklist", "/FI", "IMAGENAME eq PolatPDF.exe", "/FO", "CSV", "/NH"], capture_output=True,
                            text=True, creationflags=subprocess.CREATE_NO_WINDOW).stdout
     return cikti.lower().count('"polatpdf.exe"')
+
+
+def eski_kurulumlari_sil():
+    """Önceki güncellemelerden geçici klasörde kalan kurulum dosyalarını siler (her biri ~40 MB)."""
+    for yol in glob.glob(os.path.join(tempfile.gettempdir(), "PolatPDF-Kurulum*.exe")):
+        try:
+            os.remove(yol)
+        except OSError:
+            pass  # kurulum hâlâ çalışıyor (uygulamayı o yeniden açtı): bir sonraki açılışta silinir
 
 
 def kurulumu_baslat(url):

@@ -1717,4 +1717,5 @@ if __name__ == "__main__":
     if "--test" in sys.argv:
         pi.test()
     else:
+        guncelleme.eski_kurulumlari_sil()
         Uygulama(next((a for a in sys.argv[1:] if not a.startswith("--")), None)).pen.mainloop()
