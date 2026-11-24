@@ -294,6 +294,7 @@ class Uygulama:
                        "<Control-o>": lambda e: self.ac(), "<Control-s>": lambda e: self.kaydet(),
                        "<Control-z>": lambda e: self.geri_al(), "<Control-y>": lambda e: self.ileri_al(),
                        "<Control-c>": lambda e: self.kopyala(), "<Control-v>": lambda e: self.yapistir(),
+                       "<Control-C>": lambda e: self.kopyala(), "<Control-V>": lambda e: self.yapistir(),  # Caps Lock
                        "<Control-p>": lambda e: self.yazdir_penceresi(),
                        "<Control-Shift-S>": lambda e: self.farkli_kaydet(),
                        "<Control-Key-0>": lambda e: self.sigdir("sayfa"), "<Control-Key-1>": lambda e: self.yakinlik(1),
@@ -511,7 +512,6 @@ class Uygulama:
             self.secimi_birak()
         self.sayfa, self.ust = i, self.ustler[i]
         self.gorunenleri_ciz()
-        self.secili_metin = ""
         self.sayfa_yazi.set(f"{i + 1} / {self.doc.page_count}")
         self.kucuk_secimi()
 
@@ -948,7 +948,7 @@ class Uygulama:
         if self.belge_var():
             n = max(0, min(n, self.doc.page_count - 1))
             if n != self.sayfa:
-                self.secili, self.secili_resim, self.secili_metin = [], None, ""
+                self.secili, self.secili_resim = [], None  # seçili yazı (Ctrl+C) sayfaya bağlı değil: kalsın
             if self.surekli and n in self.ustler:  # hepsi zaten çizili: yalnızca o sayfaya kaydır
                 self.sayfaya_gec(n)
                 self.sayfanin_basina()
@@ -2000,6 +2000,7 @@ class Uygulama:
     def bas_(self, e):
         if not self.doc:
             return
+        self.tuval.focus_set()  # klavye arama / yazı boyutu kutusunda kalmasın: Ctrl+C oraya giderdi
         self.sayfayi_sec(self.tuval.canvasy(e.y))  # sürekli görünümde tıklanan sayfada çalışılır
         self.tuval.delete("metin")  # araçsız sürükleme = yazı seçimi (birak_ → metin_sec)
         self.secili_metin = ""
