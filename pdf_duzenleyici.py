@@ -154,8 +154,6 @@ class Uygulama:
         tk.Label(ust, image=self.marka, bg=tema.ZEMIN).pack(side="left")
         tk.Label(ust, text=" " + tema.AD, font=("Segoe UI Semibold", 13), fg=tema.YAZI, bg=tema.ZEMIN).pack(side="left")
         bosluk(18)
-        sol_ok = dugme("sol_kapat", "", lambda: self.sutun_ac_kapa(sol, sol_ok, "sol_kapat", "sol_ac"))
-        bosluk()
         dugme("geri", "", self.geri_al)
         dugme("ileri", "", self.ileri_al)
         bosluk()
@@ -168,8 +166,6 @@ class Uygulama:
         bosluk()
         dugme("guncelle", "Güncelle", self.guncelle)
         bosluk()
-        sag_ok = dugme("sag_kapat", "", lambda: self.sutun_ac_kapa(panel, sag_ok, "sag_kapat", "sag_ac"))
-        sag_ok.pack(side="right")
         arama = tk.Frame(ust, bg=tema.YUZEY2, padx=6)
         arama.pack(side="left", fill="y", padx=2)
         tk.Label(arama, image=tema.simge("ara", 16) or "", text="" if tema.simge("ara") else "Ara", bg=tema.YUZEY2
@@ -203,6 +199,17 @@ class Uygulama:
         govde.add(sag, stretch="always")
         panel = self.panel_kur(govde)
         govde.add(panel, minsize=200, stretch="never")
+        # sütunları gizle/göster: sayfa alanının iki kenarında, dikeyde ortada duran oklar
+        def kenar_oku(simge, komut):
+            b = tema.dugme(sag, simge, "", komut, sol=False)
+            b.config(padx=1, pady=14)
+            return b
+        sol_ok = kenar_oku("onceki", lambda: self.sutun_ac_kapa(sol, sol_ok, "onceki", "sonraki"))
+        sag_ok = kenar_oku("sonraki", lambda: self.sutun_ac_kapa(panel, sag_ok, "sonraki", "onceki"))
+        sol_yer = lambda: sol_ok.place(in_=self.tuval, relx=0, rely=0.5, anchor="w")
+        sag_yer = lambda: sag_ok.place(in_=self.tuval, relx=1, rely=0.5, anchor="e")
+        sol_yer()
+        sag_yer()
         # tam ekranda gizlenecekler: (bileşen, geri getirme)
         self.tam = False
         self.gizlenenler = [(ust, lambda: ust.pack(fill="x", before=govde)),
@@ -210,7 +217,8 @@ class Uygulama:
                             (dik, lambda: dik.pack(side="right", fill="y", before=yat)),  # köşe eskisi gibi kalsın
                             (yat, lambda: yat.pack(side="bottom", fill="x", before=self.tuval)),
                             (sol, lambda: govde.add(sol, before=sag, minsize=120)),
-                            (panel, lambda: govde.add(panel, after=sag, minsize=200, stretch="never"))]
+                            (panel, lambda: govde.add(panel, after=sag, minsize=200, stretch="never")),
+                            (sol_ok, sol_yer), (sag_ok, sag_yer)]
         self.menu, self.govde, self.tekerlek, self.son_gecis = menu, govde, 0, 0
         self.kapali_sutunlar, self.sutun_genisligi = set(), {}
 
@@ -633,6 +641,8 @@ class Uygulama:
                     geri()
             elif w.winfo_manager() == "panedwindow":
                 w.master.forget(w)
+            elif w.winfo_manager() == "place":
+                w.place_forget()
             else:
                 w.pack_forget()
         if not self.tam:
