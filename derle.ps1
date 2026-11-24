@@ -6,7 +6,8 @@ Set-Location $PSScriptRoot
 $surum = (Get-Content surum.txt -Raw).Trim()
 if ($Yayinla -and (git status --porcelain)) { throw "Kaydedilmemiş (commit edilmemiş) değişiklik var; önce commit edin" }
 
-python -c "import tema; tema.logo(256).save('polatpdf.ico', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+# her boyut ayrı çizilir: 40 px altı logo daha kalın/sade (büyükten küçültmek görev çubuğunda bulanık olurdu)
+python -c "import tema; b=[256,128,64,48,32,24,16]; r=[tema.logo(s) for s in b]; r[0].save('polatpdf.ico', sizes=[(s,s) for s in b], append_images=r[1:])"
 if ($LASTEXITCODE) { throw "Simge yapılamadı" }
 
 python -m PyInstaller --noconfirm --clean --onedir --windowed --name PolatPDF --icon polatpdf.ico `

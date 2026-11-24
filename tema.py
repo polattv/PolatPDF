@@ -2,7 +2,7 @@
 Renkleri değiştirmek için sadece buraya bak (IPTV: ui/theme/Theme.kt)."""
 import json, os
 import tkinter as tk
-from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageTk
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageTk
 
 AD = "Polat PDF"
 AYAR_DOSYASI = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "PDFDuzenleyici", "ayarlar.json")
@@ -66,25 +66,86 @@ def simge(ad, boyut=18, renk=YAZI):
     return _onbellek[anahtar]
 
 
-def logo(boyut=256):
-    """Uygulama logosu: IPTV'deki gibi mercan gradyanlı yuvarlak kare, üstünde beyaz belge."""
-    s = boyut * 4  # pürüzsüz kenar için büyük çizip küçült
-    yatay = Image.linear_gradient("L").resize((s, s))
-    maske = ImageChops.add(yatay, yatay.rotate(90), scale=2)  # sol üstten sağ alta çapraz geçiş
-    renkli = Image.composite(Image.new("RGB", (s, s), VURGU2), Image.new("RGB", (s, s), VURGU), maske)
-    sekil = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(sekil).rounded_rectangle((0, 0, s - 1, s - 1), radius=int(s * 0.22), fill=255)
+# ---------- logo: "Belge P" — kıvrık köşeli sayfadan oluşan kalın P, derinlikli mercan karo üstünde ----------
+# Marka renkleri temadan bağımsız: açık temada da logo aynı kalsın
+L_ACIK, L_KOYU, L_KIVRIM, L_GOLGE = "#FF6B84", "#A4133C", "#FF8FA3", "#6E0A28"
+
+
+def _rgb(h):
+    import numpy as np
+    return np.array([int(h[i:i + 2], 16) for i in (1, 3, 5)], float)
+
+
+def _gradyan(s, c1, c2, aci=45):
+    """c1'den c2'ye doğrusal geçiş (aci=45: sol üstten sağ alta, 90: yukarıdan aşağı)."""
+    import math
+    import numpy as np
+    y, x = np.mgrid[0:s, 0:s] / (s - 1)
+    a = math.radians(aci)
+    t = np.clip((x * math.cos(a) + y * math.sin(a)) / (abs(math.cos(a)) + abs(math.sin(a))), 0, 1)[..., None]
+    return Image.fromarray((_rgb(c1) * (1 - t) + _rgb(c2) * t).astype("uint8"), "RGB").convert("RGBA")
+
+
+def _maske(s, ciz):
+    m = Image.new("L", (s, s), 0)
+    ciz(ImageDraw.Draw(m), s)
+    return m
+
+
+def _boya(im, maske, dolgu):
+    """dolgu (renk ya da RGBA resim) maskeden geçirilip im'in üstüne konur."""
+    kat = Image.new("RGBA", im.size, dolgu) if isinstance(dolgu, str) else dolgu.copy()
+    kat.putalpha(ImageChops.multiply(kat.getchannel("A"), maske))
+    im.alpha_composite(kat)
+
+
+def _golge(im, maske, s, dy=0.022, bulanik=0.025, guc=0.45, kirp=None):
+    g = Image.new("L", im.size, 0)
+    g.paste(maske.filter(ImageFilter.GaussianBlur(s * bulanik)), (0, int(s * dy)))
+    g = g.point(lambda v: int(v * guc))
+    if kirp is not None:  # gölge karonun dışına taşmasın
+        g = ImageChops.darker(g, kirp)
+    _boya(im, g, "#3A0012")
+
+
+def _karo(s, kucuk):
+    """Derinlikli mercan karo: gradyan + üstte parlaklık + altta koyulaşma. (resim, karo maskesi)."""
+    import numpy as np
+    pay = 0 if kucuk else s * 0.03  # küçükte kenar boşluğu yok: görev çubuğunda iri dursun
+    karo = _maske(s, lambda d, s: d.rounded_rectangle((pay, pay, s - 1 - pay, s - 1 - pay), radius=s * 0.23, fill=255))
     im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    im.paste(renkli, (0, 0), sekil)
-    d = ImageDraw.Draw(im)
-    x0, y0, x1, y1, kat = s * 0.27, s * 0.17, s * 0.73, s * 0.83, s * 0.13  # belge ve kıvrık köşesi
-    d.polygon([(x0, y0), (x1 - kat, y0), (x1, y0 + kat), (x1, y1), (x0, y1)], fill="white")
-    d.polygon([(x1 - kat, y0), (x1 - kat, y0 + kat), (x1, y0 + kat)], fill=VURGU_ACIK)
-    try:
-        f = ImageFont.truetype(r"C:\Windows\Fonts\segoeuib.ttf", int(s * 0.15))
-    except OSError:
-        f = ImageFont.load_default()
-    d.text((s / 2, s * 0.62), "PDF", font=f, fill=VURGU2, anchor="mm")
+    _boya(im, karo, _gradyan(s, L_ACIK, L_KOYU, 60))
+    parlak = np.linspace(1, 0, s)[:, None] ** 2.2 * np.ones((1, s))  # üst yarıda yumuşak parlaklık
+    _boya(im, Image.fromarray((np.minimum(parlak * 70, 255) * (np.asarray(karo) / 255)).astype(np.uint8)), "#FFFFFF")
+    kayik = Image.new("L", (s, s), 0)
+    kayik.paste(karo, (0, -int(s * 0.03)))
+    alt = np.clip(np.asarray(karo, float) - np.asarray(kayik, float), 0, 255) * 0.35  # alt kenarda iç gölge
+    _boya(im, Image.fromarray(alt.astype(np.uint8)).filter(ImageFilter.GaussianBlur(s * 0.01)), L_GOLGE)
+    return im, karo
+
+
+def logo(boyut=256):
+    """Uygulama logosu "Belge P": kalın P harfi, sağ üst köşesi kıvrık sayfa köşesi. 4 kat büyük çizilip
+    küçültülür (pürüzsüz kenar); 40 pikselin altında daha kalın, sade biçim (görev çubuğu, başlık çubuğu)."""
+    s, kucuk = boyut * 4, boyut < 40
+    im, karo = _karo(s, kucuk)
+    x0, y0, x1, y1, ay = 0.27, 0.17, 0.76, 0.84, 0.62  # P'nin dış kutusu; ay: kasenin altı
+    sap, kat = (0.205 if kucuk else 0.185), 0.14
+    ic = (x0 + sap, y0 + 0.17, x1 - (0.175 if kucuk else 0.16), ay - (0.15 if kucuk else 0.13))
+
+    def p(d, s):
+        d.rounded_rectangle((x0 * s, y0 * s, x1 * s, ay * s), radius=0.2 * s, corners=(False, False, True, False), fill=255)
+        d.rounded_rectangle((x0 * s, y0 * s, (x0 + sap) * s, y1 * s), radius=0.04 * s, corners=(False, False, True, True),
+                            fill=255)
+        d.polygon([((x1 - kat) * s, y0 * s - 2), (x1 * s + 2, y0 * s - 2), (x1 * s + 2, (y0 + kat) * s)], fill=0)
+        d.rounded_rectangle([v * s for v in ic], radius=0.05 * s, corners=(False, True, True, False), fill=0)
+    m = _maske(s, p)
+    kivrim = _maske(s, lambda d, s: d.polygon([((x1 - kat) * s, y0 * s), ((x1 - kat) * s, (y0 + kat) * s),
+                                               (x1 * s, (y0 + kat) * s)], fill=255))
+    _golge(im, m, s, kirp=karo)
+    _boya(im, m, _gradyan(s, "#FFFFFF", "#FFE3E9", 90))
+    _golge(im, kivrim, s, dy=0.01, bulanik=0.012, guc=0.4)
+    _boya(im, kivrim, _gradyan(s, L_KIVRIM, "#FFC2CE", 45))
     return im.resize((boyut, boyut), Image.LANCZOS)
 
 
@@ -113,8 +174,9 @@ def uygula(pen):
         st.configure("TProgressbar", background=VURGU, troughcolor=YUZEY2, bordercolor=YUZEY2)
     except tk.TclError:
         pass
-    pen._polat_logo = ImageTk.PhotoImage(logo(64))  # referans tutulmazsa simge kaybolur
-    pen.iconphoto(True, pen._polat_logo)
+    # başlık / görev çubuğu küçük boyut kullanır: o boyutlar için çizilmiş sade biçim de verilsin
+    pen._polat_logo = [ImageTk.PhotoImage(logo(b)) for b in (64, 32, 16)]  # referans tutulmazsa simge kaybolur
+    pen.iconphoto(True, *pen._polat_logo)
     try:  # Windows başlık çubuğu da temaya uysun (Windows 10/11)
         import ctypes
         pen.update_idletasks()

@@ -96,8 +96,14 @@ class Uygulama:
         self.arayuzu_kur()
         self.bilgi("PDF açmak için 📂 Aç (Ctrl+O) ya da dosyayı pencereye sürükleyin. "
                    "Sayfa: PageUp/PageDown. Yakınlaştır: Ctrl + fare tekerleği.")
+        if not ilk_dosya:  # güncellemeden önce açık olan belge
+            ilk_dosya = tema.ayar_oku().get("sonra_ac")
+            if ilk_dosya:
+                tema.ayar_yaz(sonra_ac=None)
+                ilk_dosya = ilk_dosya if os.path.exists(ilk_dosya) else None
         if ilk_dosya:
             self.pen.after(100, lambda: self.ac(ilk_dosya))
+        self.pen.after(1500, self.acilista_denetle)
 
     # ---------- arayüz ----------
     def arayuzu_kur(self):
@@ -862,19 +868,73 @@ class Uygulama:
             if not getattr(sys, "frozen", False):
                 return messagebox.showinfo("Güncelle", f"Yeni sürüm var: {uzak}. Kaynak koddan çalışıyorsunuz; "
                                            "kurulu Polat PDF'i güncelleyin ya da git pull yapın.")
-            if guncelleme.acik_pencere_sayisi() > 1:  # kurulum diğer pencereleri zorla kapatır, kaydedilmemiş iş gider
-                return messagebox.showwarning("Güncelle", "Başka Polat PDF pencereleri açık. Önce onları kaydedip "
-                                              "kapatın, sonra yeniden Güncelle'ye basın.")
-            if not (messagebox.askyesno("Güncelle", f"Yeni sürüm var: {uzak}\n(şu an {guncelleme.yerel_surum()})\n\n"
-                                        "Kurulsun mu? Polat PDF kapanıp yeniden açılacak.") and self.kaydedilsin_mi()):
+            if not messagebox.askyesno("Güncelle", f"Yeni sürüm var: {uzak}\n(şu an {guncelleme.yerel_surum()})\n\n"
+                                                   "Kurulsun mu? Polat PDF kapanıp yeniden açılacak."):
                 return self.bilgi("")
         except Exception as e:
             self.bilgi("Güncellenemedi.")
             return messagebox.showerror("Güncellenemedi", f"İnternet bağlantısını denetleyin.\n\n{e}")
         finally:
             self.pen.config(cursor="")
-        if self.arkaplanda("Güncelleme indiriliyor…", lambda: guncelleme.kurulumu_baslat(url)):
-            self.pen.destroy()  # kurulum dosyaları değiştirebilsin
+        self.guncellemeyi_kur(url)
+
+    def guncellemeyi_kur(self, url, ust=None):
+        """Kurulumu indirip başlatır ve programı kapatır; kurulum bitince program açık belgeyle yeniden açılır.
+        Kurulamadıysa (başka pencere açık, kaydetme iptal, indirme hatası) False döner, program açık kalır."""
+        if guncelleme.acik_pencere_sayisi() > 1:  # kurulum diğer pencereleri zorla kapatır, kaydedilmemiş iş gider
+            messagebox.showwarning("Güncelle", "Başka Polat PDF pencereleri açık. Önce onları kaydedip kapatın, "
+                                               "sonra yeniden Güncelle'ye basın.", parent=ust)
+            return False
+        if not self.kaydedilsin_mi():
+            return False
+        if not self.arkaplanda("Güncelleme indiriliyor…", lambda: guncelleme.kurulumu_baslat(url)):
+            return False
+        if self.yol and os.path.exists(self.yol):
+            tema.ayar_yaz(sonra_ac=self.yol)  # güncellemeden sonra aynı belgeyle açılsın
+        self.pen.destroy()  # kurulum dosyaları değiştirebilsin
+        return True
+
+    def acilista_denetle(self):
+        """Açılışta arka planda yeni sürüme bakar; varsa güncellemeden devam edilemez (zorunlu güncelleme).
+        İnternet yoksa ya da GitHub'a ulaşılamazsa program normal çalışır: internetsiz anda PDF açılamaz olmasın."""
+        if not getattr(sys, "frozen", False):  # kaynak koddan çalışırken (geliştirme) zorlama yok
+            return
+        import threading
+        sonuc = []
+
+        def denetle():
+            try:
+                sonuc.append(guncelleme.yeni_var_mi(zaman=5))
+            except Exception:
+                sonuc.append(None)  # bağlantı yok: sessizce devam
+
+        def bekle():
+            if not sonuc:
+                return self.pen.after(300, bekle)
+            if sonuc[0] and sonuc[0][0] and sonuc[0][2]:  # yeni sürüm var ve kurulum dosyası yüklenmiş
+                self.zorunlu_guncelleme(*sonuc[0][1:])
+
+        threading.Thread(target=denetle, daemon=True).start()
+        bekle()
+
+    def zorunlu_guncelleme(self, uzak, url):
+        """Kapatılamayan pencere: güncelle ya da programı kapat. Eski sürümle çalışmaya devam edilemez."""
+        w = self.pencere("Güncelleme gerekli")
+        w.protocol("WM_DELETE_WINDOW", self.kapat)  # pencereyi kapatmak = programı kapatmak
+        tk.Label(w, image=tema.simge("guncelle", 28) or "", text="").grid(row=0, column=0, rowspan=2, padx=(0, 12),
+                                                                           sticky="n")
+        tk.Label(w, text=f"Polat PDF {uzak} yayımlandı", font=("Segoe UI Semibold", 12)).grid(row=0, column=1, sticky="w")
+        tk.Label(w, text=f"Kullandığınız sürüm: {guncelleme.yerel_surum()}. Devam etmek için güncellemeniz gerekiyor.\n"
+                         "Güncelleme birkaç saniye sürer; Polat PDF kapanıp açık belgenizle yeniden açılır.",
+                 fg=tema.YAZI2, justify="left").grid(row=1, column=1, sticky="w", pady=(2, 0))
+        alt = tk.Frame(w, pady=12)
+        alt.grid(row=2, column=0, columnspan=2, sticky="e")
+        tema.dugme(alt, None, "Programı kapat", self.kapat, sol=False).pack(side="right")
+        # kurulamadıysa (indirme hatası vb.) ilerleme penceresi kilidi bıraktı: pencere yine kilitlesin
+        tema.dugme(alt, "guncelle", "Şimdi güncelle", lambda: self.guncellemeyi_kur(url, w) or w.grab_set(),
+                   sol=False).pack(side="right", padx=6)
+        w.grab_set()
+        w.focus_force()
 
     def kapat(self):
         if self.kaydedilsin_mi():
@@ -1296,6 +1356,7 @@ class Uygulama:
         finally:
             self.mesgul = False
         self.pen.config(cursor="")
+        cubuk.stop()  # animasyon zamanlayıcısı kapanan pencereye çağrı yapmasın
         w.destroy()
         self.gorunenleri_ciz()  # iş sürerken pencere boyutu / kaydırma değiştiyse ekranı tamamla
         if hata:

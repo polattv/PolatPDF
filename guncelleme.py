@@ -9,9 +9,9 @@ def _sayi(s):
     return tuple(int(p) for p in re.findall(r"\d+", s))  # "v1.2.0-beta" → (1, 2, 0)
 
 
-def _indir(url):
+def _indir(url, zaman=30):
     istek = urllib.request.Request(url, headers={"User-Agent": "PolatPDF"})  # GitHub API User-Agent ister
-    with urllib.request.urlopen(istek, timeout=30) as y:
+    with urllib.request.urlopen(istek, timeout=zaman) as y:
         return y.read()
 
 
@@ -23,16 +23,16 @@ def yerel_surum():
         return "0"
 
 
-def son_surum():
+def son_surum(zaman=30):
     """(sürüm, kurulum_url) — sürüm ve dosya aynı Release'ten gelir, biri yüklenmeden diğeri görünmez."""
-    r = json.loads(_indir(f"https://api.github.com/repos/{DEPO}/releases/latest"))
+    r = json.loads(_indir(f"https://api.github.com/repos/{DEPO}/releases/latest", zaman))
     url = next((a["browser_download_url"] for a in r.get("assets", []) if a["name"].lower().endswith(".exe")), None)
     return r["tag_name"].lstrip("vV"), url
 
 
-def yeni_var_mi():
+def yeni_var_mi(zaman=30):
     """(yeni_mi, sürüm, url). url None ise sürüm var ama kurulum dosyası yüklenmemiş. İnternet yoksa hata fırlatır."""
-    surum, url = son_surum()
+    surum, url = son_surum(zaman)
     return _sayi(surum) > _sayi(yerel_surum()), surum, url
 
 
