@@ -18,6 +18,7 @@ GECMIS_SINIRI = 300 * 1024 * 1024  # geri al için en fazla bu kadar bellek
 AYAR_KLASORU = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "PDFDuzenleyici")
 SON_YOLU = os.path.join(AYAR_KLASORU, "son_acilanlar.json")
 IMZA_YOLU = os.path.join(AYAR_KLASORU, "imza.png")
+KASE_KLASORU = os.path.join(AYAR_KLASORU, "kaseler")
 
 IPUCU = {"sec": "Seç: nota tıklayınca içeriği açılır. Şekli / kalem çizimini / oku sürükleyerek taşıyın; "
                 "tıklayıp Delete ile silin.",
@@ -37,7 +38,8 @@ IPUCU = {"sec": "Seç: nota tıklayınca içeriği açılır. Şekli / kalem çi
          "degistir": "Beyazla + yaz: kutu çizin; alan beyazla kapatılıp yerine yeni yazı yazılır (taranmış belgeler için).",
          "karart": "Karart: KALICI silinecek alanı çizin (yazı, resim, not, form alanı — geri getirilemez).",
          "form": "Form alanı: yeni alanın kutusunu çizin.",
-         "imza": "İmzam: imzanın gideceği yere tıklayın (ya da kutu çizin). İmzayı değiştirmek: Belge → İmzamı değiştir."}
+         "imza": "İmzam: imzanın gideceği yere tıklayın (ya da kutu çizin). İmzayı değiştirmek: Belge → İmzamı değiştir.",
+         "kase": "Kaşe: basılacak yere tıklayın (ya da kutu çizin). Başka kaşe: Kaşelerim."}
 DAMGALAR = ["ÖDENDİ", "ONAYLANDI", "REDDEDİLDİ", "GİZLİDİR", "TASLAK", "ASLI GİBİDİR", "KOPYADIR"]
 HIZALAR = {"Sola": 0, "Ortala": 1, "Sağa": 2, "İki yana": 3}
 NOKTA_ARACLARI = {"yazi", "not", "sec", "duzenle"}  # tek tıklama yeterli
@@ -375,7 +377,8 @@ class Uygulama:
                                  ("kalem", "kalem", "Kalem"), ("dikdortgen", "dikdortgen", "Dikdörtgen"),
                                  ("daire", "daire", "Daire"), ("cizgi", "cizgi", "Çizgi"), ("ok", "ok", "Ok")])
         grup("Belge", [(self.ocr, "ocr", "Yazı tanı (OCR)"), ("imza", "imza", "İmzam"),
-                       (self.imza_penceresi, "kalem", "İmzamı değiştir"), ("damga", "damga", "Damga"),
+                       (self.imza_penceresi, "kalem", "İmzamı değiştir"), (self.kase_penceresi, "kase", "Kaşelerim"),
+                       ("damga", "damga", "Damga"),
                        ("resim", "resim", "Resim ekle"), ("form", "form", "Form alanı"),
                        (self.form_penceresi, "doldur", "Formu doldur"), ("karart", "karart", "Karart"),
                        (self.bulunanlari_karart, "her_yerde", "Her yerde")])
@@ -1581,6 +1584,12 @@ class Uygulama:
         m.add_command(label="Buraya yazı ekle…", command=yazi)
         m.add_command(label="Buraya not ekle…", command=not_)
         m.add_command(label="Buraya imzamı koy", command=lambda: self.imza_koy(s, p[0], p[1], None))
+        km = tk.Menu(m, tearoff=0)
+        for ad, yol in self.kaseler():
+            km.add_command(label=ad, command=lambda y=yol: self.kayitli_resmi_koy(s, p[0], p[1], None, y))
+        km.add_separator()
+        km.add_command(label="Kaşelerim…", command=self.kase_penceresi)
+        m.add_cascade(label="Buraya kaşe bas", menu=km)
         m.add_separator()
         m.add_command(label="Sayfayı sağa döndür", command=lambda: self.dondur(90))
         m.add_command(label="Sayfayı sola döndür", command=lambda: self.dondur(270))
@@ -2190,6 +2199,8 @@ class Uygulama:
             return self.resim_koy(s, x0, y0, None if kucuk else kutu())
         if mod == "imza":
             return self.imza_koy(s, x0, y0, None if kucuk else kutu())
+        if mod == "kase":
+            return self.kayitli_resmi_koy(s, x0, y0, None if kucuk else kutu(), self.secili_kase)
         if kucuk:
             return self.bilgi("Alan çok küçük; fareyi basılı tutup bir kutu çizin.")
         if mod in pi.ISARETLER:
@@ -2256,13 +2267,119 @@ class Uygulama:
         from PIL import Image
         if not os.path.exists(IMZA_YOLU) and not self.imza_penceresi():
             return
-        with Image.open(IMZA_YOLU) as im:
-            im = im.convert("RGBA")
-        if kutu is None:  # imza tıklanan yere, sayfa genişliğinin dörtte biri kadar
-            g = s.rect
-            en = g.width / 4
+        self.kayitli_resmi_koy(s, x, y, kutu, IMZA_YOLU)
+
+    def kayitli_resmi_koy(self, s, x, y, kutu, yol):
+        """Kayıtlı imza / kaşe PNG'sini tıklanan yere (sayfa genişliğinin dörtte biri) ya da çizilen kutuya koyar."""
+        from PIL import Image
+        try:
+            with Image.open(yol) as im:
+                im = im.convert("RGBA")
+        except OSError as e:
+            return messagebox.showerror("Açılamadı", f"{os.path.basename(yol)} okunamadı.\n\n{e}")
+        if kutu is None:
+            en = s.rect.width / 4
             kutu = pi.gorunumden(s, x, y, x + en, y + en * im.height / im.width)
         self.resmi_yerlestir(s, x, y, kutu, im)
+
+    # ---------- Kaşelerim: birden çok kayıtlı kaşe (ör. Canva'da arka planı silinmiş PNG'ler) ----------
+    @staticmethod
+    def kaseler():
+        """[(ad, yol)] — %APPDATA%\\PDFDuzenleyici\\kaseler içindeki PNG'ler, ada göre."""
+        if not os.path.isdir(KASE_KLASORU):
+            return []
+        return [(os.path.splitext(f)[0].replace("_", " "), os.path.join(KASE_KLASORU, f))
+                for f in sorted(os.listdir(KASE_KLASORU), key=str.lower) if f.lower().endswith(".png")]
+
+    def kase_bas(self, yol):
+        """Seçilen kaşeyi basma aracına geç: sayfada tıklanan yere (ya da çizilen kutuya) basılır."""
+        if not self.belge_var():
+            return
+        self.secili_kase = yol
+        if self.mod != "kase":
+            self.mod_sec("kase")
+        self.bilgi(f"“{os.path.splitext(os.path.basename(yol))[0].replace('_', ' ')}” kaşesi: basılacak yere tıklayın "
+                   "(ya da kutu çizin). Araçtan çıkmak: Esc.")
+
+    def kase_ekle(self, ust):
+        """Resimden yeni kaşe kaydeder. Canva'dan şeffaf PNG geliyorsa 'Arka planı temizle' kapalı bırakılır."""
+        from PIL import Image, ImageOps
+        yol = filedialog.askopenfilename(parent=ust, title="Kaşe resmi (Canva'dan şeffaf PNG ya da fotoğraf)",
+                                         filetypes=[("Resim", "*.png *.jpg *.jpeg *.bmp *.webp"), ("Tümü", "*.*")])
+        if not yol:
+            return
+        try:
+            with Image.open(yol) as im:
+                im = ImageOps.exif_transpose(im).convert("RGBA")
+        except OSError as e:
+            return messagebox.showerror("Kaşe eklenemedi", str(e), parent=ust)
+        im = self.arka_plan_penceresi(im, ilk_ekleme=True)
+        if im is None:
+            return
+        ad = simpledialog.askstring("Kaşe adı", "Bu kaşenin adı (ör. Kirpol kaşesi):", parent=ust,
+                                    initialvalue=os.path.splitext(os.path.basename(yol))[0])
+        if not ad or not ad.strip():
+            return
+        dosya = "".join(c if c.isalnum() or c in " -" else "_" for c in ad.strip()).replace(" ", "_")
+        hedef, n = os.path.join(KASE_KLASORU, dosya + ".png"), 2
+        while os.path.exists(hedef):  # aynı ad varsa üstüne yazma
+            hedef, n = os.path.join(KASE_KLASORU, f"{dosya}_{n}.png"), n + 1
+        os.makedirs(KASE_KLASORU, exist_ok=True)
+        im.crop(im.getchannel("A").getbbox() or (0, 0, *im.size)).save(hedef)  # boş şeffaf kenarlar gitsin
+        return hedef
+
+    def kase_penceresi(self):
+        """Kayıtlı kaşeler: küçük resimleri, Bas / Sil; yeni kaşe ekle."""
+        from PIL import Image
+        w = self.pencere("Kaşelerim")
+        w.resizable(True, True)
+        tk.Label(w, text="Kaşe: Canva'da arka planı kaldırıp şeffaf PNG indirin, buraya ekleyin; “Bas” ile sayfaya "
+                         "tıklayarak basın.", fg=tema.YAZI2, wraplength=460, justify="left").pack(anchor="w")
+        liste = tk.Frame(w, pady=8)
+        liste.pack(fill="both", expand=True)
+
+        def doldur():
+            for c in liste.winfo_children():
+                c.destroy()
+            kayitli = self.kaseler()
+            if not kayitli:
+                tk.Label(liste, text="Henüz kayıtlı kaşe yok.", fg=tema.YAZI2).grid(row=0, column=0, sticky="w")
+            for i, (ad, yol) in enumerate(kayitli):
+                hucre = tk.Frame(liste, bg=tema.YUZEY2, padx=8, pady=8)
+                hucre.grid(row=i // 3, column=i % 3, padx=4, pady=4, sticky="n")
+                try:
+                    with Image.open(yol) as im:
+                        im = im.convert("RGBA")
+                    im.thumbnail((110, 110))
+                    zemin = Image.new("RGBA", (110, 110), "white")
+                    zemin.alpha_composite(im, ((110 - im.width) // 2, (110 - im.height) // 2))
+                    foto = ImageTk.PhotoImage(zemin)
+                except OSError:
+                    foto = None
+                r = tk.Label(hucre, image=foto or "", text="" if foto else "(okunamadı)", bg="white")
+                r.foto = foto  # referans tutulmazsa resim kaybolur
+                r.pack()
+                tk.Label(hucre, text=ad, bg=tema.YUZEY2, wraplength=120).pack(pady=(4, 2))
+                d = tk.Frame(hucre, bg=tema.YUZEY2)
+                d.pack()
+                tema.dugme(d, None, "Bas", lambda y=yol: (w.destroy(), self.kase_bas(y)), sol=False).pack(side="left")
+                tema.dugme(d, "sil", "", lambda y=yol, a=ad: sil(y, a), sol=False).pack(side="left", padx=(4, 0))
+
+        def sil(yol, ad):
+            if messagebox.askyesno("Kaşeyi sil", f"“{ad}” kaşesi listeden silinsin mi?\n(Belgelere basılmış olanlar "
+                                                 "etkilenmez.)", parent=w):
+                os.remove(yol)
+                doldur()
+
+        def ekle():
+            if self.kase_ekle(w):
+                doldur()
+
+        alt = tk.Frame(w, pady=6)
+        alt.pack(fill="x")
+        tema.dugme(alt, "resim", "Yeni kaşe ekle…", ekle, sol=False).pack(side="left")
+        tema.dugme(alt, None, "Kapat", w.destroy, sol=False).pack(side="right")
+        doldur()
 
     def imza_penceresi(self):
         """İmzayı fareyle çizdirir (ya da resimden alır) ve %APPDATA%'ya kaydeder. Kaydedildiyse True."""
