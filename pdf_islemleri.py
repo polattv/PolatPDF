@@ -320,6 +320,38 @@ def resmi_yerlestir(page, xref, yeni_rect, veri=None):
     return page.insert_image(yeni_rect, stream=veri, rotate=page.rotation, keep_proportion=False)
 
 
+def resmi_dondur(page, xref, bbox, aci):
+    """Resmi ekranda saat yönünde aci derece döndürür, merkezi ve ölçeği aynı kalır. (yeni xref, yeni kutu) döner.
+    PDF resmi yalnız 90°'nin katlarıyla döndürebildiği için pikseller döndürülüp yeniden konur; köşeler şeffaf olur.
+    shortcut: her döndürme yeniden örnekler (çok kez döndürmek hafif bulanıklaştırır), gerekirse asıl resim saklanmalı."""
+    from PIL import Image
+    im = resim_pil(page.parent, xref)
+    g = gorunume(page, bbox)  # ekranda görülen kutu
+    k = math.sqrt(g.width * g.height / (im.width * im.height))  # punto / piksel
+    don = im.rotate(-aci, resample=Image.BICUBIC, expand=True)
+    # boş şeffaf kenarları at; png_baytlari'nın köşeye koyduğu neredeyse görünmez pikseller (alfa < 8) sayılmaz
+    sol, ust, sag, alt = don.getchannel("A").point(lambda v: 255 if v >= 8 else 0).getbbox() or (0, 0, *don.size)
+    # kırpınca merkez kayar: kayma kadar düzelt ki resim kendi merkezi etrafında dönmüş görünsün
+    mx = (g.x0 + g.x1) / 2 + ((sol + sag) / 2 - don.width / 2) * k
+    my = (g.y0 + g.y1) / 2 + ((ust + alt) / 2 - don.height / 2) * k
+    don = don.crop((sol, ust, sag, alt))
+    en, boy = don.width * k / 2, don.height * k / 2
+    yeni = gorunumden(page, mx - en, my - boy, mx + en, my + boy)
+    return resmi_yerlestir(page, xref, yeni, png_baytlari(don)), yeni
+
+
+def resmi_her_sayfaya(doc, im, gorunur_kutu, haric):
+    """Resmi haric dışındaki her sayfaya, ekranda görülen aynı kutuya basar (döndürülmüş sayfada da düz).
+    Tek resim nesnesi paylaşılır: dosya büyümez; tek sayfada taşıma/silme kendine_ayir ile o sayfayı ayırır."""
+    veri, n, hedef = png_baytlari(im), 0, pymupdf.Rect(gorunur_kutu)
+    ayni = lambda s: any(max(abs(a - b) for a, b in zip(gorunume(s, r["bbox"]), hedef)) < 3 for r in resimler(s))
+    for i, s in enumerate(doc):
+        if i != haric and not ayni(s):  # o sayfada aynı yerde zaten var (ör. elle yapıştırılmış): iki kat basma
+            s.insert_image(gorunumden(s, *gorunur_kutu), stream=veri, rotate=s.rotation, keep_proportion=True)
+            n += 1
+    return n
+
+
 def resmi_sil(page, xref):
     page.delete_image(kendine_ayir(page, xref))
 

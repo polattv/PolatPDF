@@ -2,7 +2,7 @@
 
 Kullanım: pythonw pdf_duzenleyici.py [dosya.pdf]     |     python pdf_duzenleyici.py --test
 """
-import bisect, json, os, sys, time
+import bisect, json, math, os, sys, time
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 import pymupdf
@@ -90,6 +90,8 @@ class Uygulama:
         self.karartma_onayli = False
         self.kalem_noktalari = []
         self.secili, self.tasima, self.olcekleme = [], None, None  # Yazıyı düzenle: seçim, taşıma, büyütme
+        self.dondurme = None  # seçili resmi döndürme tutamacıyla çevirirken
+        self.klavye_acisi, self.klavye_isi, self.shift_basili = None, None, False  # Ctrl+←/→ ile hassas döndürme
         self.boyut = tk.IntVar(value=11)
         self.hiza = tk.StringVar(value="Sola")
         self.sayfa_yazi, self.zoom_yazi = tk.StringVar(), tk.StringVar(value="%130")
@@ -304,6 +306,10 @@ class Uygulama:
                        "<Control-c>": lambda e: self.kopyala(), "<Control-v>": lambda e: self.yapistir(),
                        "<Control-C>": lambda e: self.kopyala(), "<Control-V>": lambda e: self.yapistir(),  # Caps Lock
                        "<Control-p>": lambda e: self.yazdir_penceresi(),
+                       "<Control-Left>": lambda e: self.klavyeyle_dondur(-1),
+                       "<Control-Right>": lambda e: self.klavyeyle_dondur(1),
+                       "<Control-Shift-Left>": lambda e: self.klavyeyle_dondur(-0.1),
+                       "<Control-Shift-Right>": lambda e: self.klavyeyle_dondur(0.1),
                        "<Control-Shift-S>": lambda e: self.farkli_kaydet(),
                        "<Control-Key-0>": lambda e: self.sigdir("sayfa"), "<Control-Key-1>": lambda e: self.yakinlik(1),
                        "<Control-Key-2>": lambda e: self.sigdir("genislik"),
@@ -508,7 +514,7 @@ class Uygulama:
             return
         self.gorunenleri_ciz()
         # sürüklerken ya da seçim varken sayfa değişmesin (kaydırınca seçim kaybolmasın)
-        if self.surekli and not (self.bas or self.tasima or self.olcekleme or self.secim_var()):
+        if self.surekli and not (self.bas or self.tasima or self.olcekleme or self.dondurme or self.secim_var()):
             t = self.tuval
             orta = t.canvasy(t.winfo_height() / 2)
             i = max(0, bisect.bisect_right(list(self.ustler.values()), orta) - 1)
@@ -1560,12 +1566,17 @@ class Uygulama:
         s = self.doc[self.sayfa]
         p = ((cx - KENAR) / self.zoom, (cy - self.ust) / self.zoom)  # görünen sayfa koordinatı
         m = tk.Menu(self.pen, tearoff=0)
-        if getattr(self, "secili_metin", "") or (self.mod == "duzenle" and self.secili):
+        if getattr(self, "secili_metin", "") or (self.mod == "duzenle" and (self.secili or self.secili_resim)):
             m.add_command(label="Kopyala", accelerator="Ctrl+C", command=self.kopyala)
         if getattr(self, "pano", None):
             m.add_command(label="Buraya yapıştır", accelerator="Ctrl+V", command=lambda: self.yapistir((e.x, e.y)))
         if self.mod == "duzenle" and self.secim_var():
             m.add_command(label="Seçileni sil", accelerator="Delete", command=self.secilileri_sil)
+        if self.mod == "duzenle" and self.secili_resim:
+            m.add_command(label="Resmi sağa 90° döndür", command=lambda: self.resmi_dondur(90))
+            m.add_command(label="Resmi sola 90° döndür", command=lambda: self.resmi_dondur(-90))
+            m.add_command(label="Açıyı yaz… (hassas döndür)", command=self.aci_yaz)
+            m.add_command(label="Bütün sayfalara aynı yere bas", command=self.resmi_her_sayfaya)
         if m.index("end") is not None:
             m.add_separator()
 
@@ -1810,6 +1821,11 @@ class Uygulama:
         self.tuval.create_rectangle(x0 - 3, y0 - 3, x1 + 3, y1 + 3, outline=tema.VURGU, width=2, tags=("secili",))
         self.tuval.create_rectangle(x1 - 2, y1 - 2, x1 + 8, y1 + 8, fill=tema.VURGU, outline="white",
                                     tags=("secili", "tutamac"))
+        if self.secili_resim:  # resim (kaşe, imza): üstte döndürme tutamacı
+            cx, ty = self.dondurme_tutamaci()
+            self.tuval.create_line(cx, y0 - 3, cx, ty, fill=tema.VURGU, width=2, tags=("secili",))
+            self.tuval.create_oval(cx - 7, ty - 7, cx + 7, ty + 7, fill="white", outline=tema.VURGU, width=2,
+                                   tags=("secili",))
 
     def tutamacta_mi(self, c):
         if not self.secim_var():
@@ -1817,8 +1833,81 @@ class Uygulama:
         _, _, x1, y1 = self.secim_kutusu()
         return abs(c[0] - x1 - 3) <= 9 and abs(c[1] - y1 - 3) <= 9
 
+    def dondurme_tutamaci(self):
+        """Seçili resmin döndürme tutamacının tuvaldeki yeri: üst kenarın ortasının 24 piksel yukarısı."""
+        x0, y0, x1, _ = self.secim_kutusu()
+        return (x0 + x1) / 2, y0 - 27
+
+    def dondurmede_mi(self, c):
+        if not self.secili_resim:
+            return False
+        cx, ty = self.dondurme_tutamaci()
+        return abs(c[0] - cx) <= 10 and abs(c[1] - ty) <= 10
+
+    @staticmethod
+    def aci_yazisi(aci):
+        a = round(aci, 1)
+        return f"{a:g}°".replace(".", ",")
+
+    def resmi_dondur(self, aci):
+        """Seçili resmi (kaşe, imza) ekranda saat yönünde aci derece döndürür; seçili kalır."""
+        s, r = self.doc[self.sayfa], self.secili_resim
+        aci = (aci + 180) % 360 - 180  # -180..180: 350° yerine -10° (daha az dönüş, aynı sonuç)
+        if not r or abs(aci) < 0.05:
+            return self.secim_ciz()
+        self.secili_resim, sonuc = None, []
+        if self.degisiklik(lambda: sonuc.append(pi.resmi_dondur(s, r["xref"], r["bbox"], aci))):
+            self.resmi_sec(*sonuc[0])
+            self.bilgi(f"Resim {self.aci_yazisi(aci)} döndürüldü. Geri almak için Ctrl+Z.")
+
+    def dondurme_onizle(self, aci):
+        """Seçim çerçevesini merkez etrafında aci kadar dönmüş çizer (uygulamadan önce önizleme)."""
+        x0, y0, x1, y1 = self.secim_kutusu()
+        mx, my, a = (x0 + x1) / 2, (y0 + y1) / 2, math.radians(aci)
+        kose = [((x - mx) * math.cos(a) - (y - my) * math.sin(a) + mx, (x - mx) * math.sin(a) + (y - my) * math.cos(a) + my)
+                for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+        self.tuval.delete("secili")
+        self.tuval.create_polygon(*[v for p in kose for v in p], outline=tema.VURGU, fill="", width=2, dash=(4, 2),
+                                  tags=("secili",))
+
+    def klavyeyle_dondur(self, adim):
+        """Ctrl+←/→: 1°, Ctrl+Shift+←/→: 0,1°. Basışlar toplanır, tuşlar bırakılınca tek seferde uygulanır:
+        her basışta resmi yeniden işlemek kaşeyi bulanıklaştırırdı."""
+        if self.mod != "duzenle" or not self.secili_resim or self.odak_yazida():
+            return
+        if self.klavye_acisi is None:
+            self.klavye_acisi = 0
+        else:
+            self.pen.after_cancel(self.klavye_isi)
+        self.klavye_acisi += adim
+        self.dondurme_onizle(self.klavye_acisi)
+        self.bilgi(f"Açı: {self.aci_yazisi(self.klavye_acisi)} — tuşu bırakınca uygulanır")
+
+        def uygula():
+            aci, self.klavye_acisi = self.klavye_acisi, None
+            self.resmi_dondur(aci)
+        self.klavye_isi = self.pen.after(700, uygula)
+
+    def resmi_her_sayfaya(self):
+        """Seçili resmi (kaşe) öteki bütün sayfalara, ekranda aynı yere ve aynı boyutta basar."""
+        s, r = self.doc[self.sayfa], self.secili_resim
+        if not r or self.doc.page_count < 2:
+            return
+        n = self.doc.page_count - 1
+        if not messagebox.askyesno("Bütün sayfalara", f"Bu resim öteki {n} sayfaya da aynı yere basılsın mı?"):
+            return
+        im, kutu, sonuc = pi.resim_pil(self.doc, r["xref"]), tuple(pi.gorunume(s, r["bbox"])), []
+        if self.degisiklik(lambda: sonuc.append(pi.resmi_her_sayfaya(self.doc, im, kutu, self.sayfa)), sayfalar=True):
+            self.bilgi(f"Resim {sonuc[0]} sayfaya daha basıldı. Geri almak için Ctrl+Z.")
+
+    def aci_yaz(self):
+        aci = simpledialog.askfloat("Döndür", "Kaç derece döndürülsün?\n(saat yönü artı, ters yön eksi; ör. 2,5 ya da -15)",
+                                    parent=self.pen, minvalue=-360, maxvalue=360)
+        if aci is not None:
+            self.resmi_dondur(aci)
+
     def secimi_birak(self):
-        self.secili, self.secili_resim, self.tasima, self.olcekleme = [], None, None, None
+        self.secili, self.secili_resim, self.tasima, self.olcekleme, self.dondurme = [], None, None, None, None
         self.isaret = None
         self.secim_ciz()
 
@@ -1890,9 +1979,14 @@ class Uygulama:
             self.pen.clipboard_clear()
             self.pen.clipboard_append(self.secili_metin)
             return self.bilgi("Seçili yazı kopyalandı.")
+        if self.mod == "duzenle" and self.secili_resim:  # kaşe / imza / resim: başka sayfaya da yapıştırılabilir
+            s, r = self.doc[self.sayfa], self.secili_resim
+            self.pano = {"resim": pi.resim_pil(self.doc, r["xref"]), "kutu": tuple(pi.gorunume(s, r["bbox"]))}
+            return self.bilgi("Resim kopyalandı. Başka sayfada Ctrl+V: farenin olduğu yere; fare sayfanın dışındaysa "
+                              "aynı yere. Sağ tık: “Bütün sayfalara aynı yere bas”.")
         if self.mod != "duzenle" or not self.secili:
             return self.bilgi("Kopyalamak için araç seçmeden yazının üstünden kutu çizin; eklediğiniz yazıyı biçimiyle "
-                              "kopyalamak için “Yazıyı düzenle” aracıyla seçin.")
+                              "ya da kaşeyi / resmi kopyalamak için “Yazıyı düzenle” aracıyla seçin.")
         self.pano = list(self.secili)
         self.pen.clipboard_clear()
         self.pen.clipboard_append("\n".join(pi.satir_metni(l) for l in self.pano).replace("\xa0", " "))
@@ -1905,7 +1999,18 @@ class Uygulama:
             return
         s, sec, t = self.doc[self.sayfa], self.pano, self.tuval
         cx, cy = nokta or (t.winfo_pointerx() - t.winfo_rootx(), t.winfo_pointery() - t.winfo_rooty())
-        if 0 <= cx < t.winfo_width() and 0 <= cy < t.winfo_height():
+        fare_sayfada = 0 <= cx < t.winfo_width() and 0 <= cy < t.winfo_height()
+        if isinstance(sec, dict):  # kopyalanan resim (kaşe): farenin yerine ya da kopyalandığı yerin aynısına
+            if fare_sayfada:
+                self.sayfayi_sec(t.canvasy(cy))
+            s = self.doc[self.sayfa]
+            x0, y0, x1, y1 = sec["kutu"]
+            if fare_sayfada:
+                x0, y0 = (t.canvasx(cx) - KENAR) / self.zoom, (t.canvasy(cy) - self.ust) / self.zoom
+            kutu = pi.gorunumden(s, x0, y0, x0 + (sec["kutu"][2] - sec["kutu"][0]), y0 + (sec["kutu"][3] - sec["kutu"][1]))
+            self.resmi_yerlestir(s, x0, y0, kutu, sec["resim"])
+            return self.bilgi(f"Resim {self.sayfa + 1}. sayfaya yapıştırıldı.")
+        if fare_sayfada:
             self.sayfayi_sec(t.canvasy(cy))  # sürekli görünümde farenin altındaki sayfaya yapıştır
             s = self.doc[self.sayfa]
             p = pi.noktadan(s, (t.canvasx(cx) - KENAR) / self.zoom, (t.canvasy(cy) - self.ust) / self.zoom)
@@ -1980,6 +2085,10 @@ class Uygulama:
 
     def tasi_bas(self, e):
         s, c = self.doc[self.sayfa], self.nokta(e)
+        if self.dondurmede_mi(c):  # üstteki yuvarlaktan tut: döndür
+            x0, y0, x1, y1 = self.secim_kutusu()
+            self.dondurme = {"merkez": ((x0 + x1) / 2, (y0 + y1) / 2), "kutu": (x0, y0, x1, y1), "aci": 0}
+            return
         if self.tutamacta_mi(c):  # köşeden tut: büyüt / küçült
             x0, y0, x1, y1 = self.secim_kutusu()
             self.olcekleme = {"sol": x0, "ust": y0, "en": max(1, x1 - x0), "boy": max(1, y1 - y0), "olcek": 1}
@@ -1999,6 +2108,16 @@ class Uygulama:
             self.kutu = self.tuval.create_rectangle(*c, *c, outline=tema.VURGU, dash=(3, 3))
 
     def tasi_surukle(self, n):
+        if self.dondurme:
+            d = self.dondurme
+            mx, my = d["merkez"]
+            aci = round(math.degrees(math.atan2(n[0] - mx, my - n[1])))  # yukarı = 0°, saat yönü artı; tam derece
+            yakin = round(aci / 90) * 90
+            # 0/90/180/270'nin 2° yakınında oraya otur; Shift basılıyken oturmaz (hassas)
+            d["aci"] = yakin if abs(aci - yakin) <= 2 and not self.shift_basili else aci
+            self.dondurme_onizle(d["aci"])
+            return self.bilgi(f"Açı: {self.aci_yazisi(d['aci'])}  · Shift: hassas (oturmaz) · Ctrl+←/→: 1° · "
+                              "sağ tık: açıyı yaz")
         if self.olcekleme:
             o = self.olcekleme
             sag, alt = KENAR + self.img.width(), self.ust + self.img.height()
@@ -2017,6 +2136,9 @@ class Uygulama:
 
     def tasi_birak(self, e):
         s, z = self.doc[self.sayfa], self.zoom
+        if self.dondurme:
+            d, self.dondurme = self.dondurme, None
+            return self.resmi_dondur(d["aci"])
         if self.olcekleme:
             o, self.olcekleme = self.olcekleme, None
             if abs(o["olcek"] - 1) < 0.02:
@@ -2031,7 +2153,8 @@ class Uygulama:
                 ne = "Resim" if self.secili_resim else f"{len(self.secili)} satır"
                 cift = "arka planı temizle" if self.secili_resim else "düzenle"
                 return self.bilgi(f"{ne} seçili. Sürükle: taşı · köşedeki kare: büyüt/küçült · "
-                                  f"çift tıkla / Enter: {cift} · oklar: kaydır · Delete: sil")
+                                  + ("üstteki yuvarlak: döndür · " if self.secili_resim else "")
+                                  + f"çift tıkla / Enter: {cift} · oklar: kaydır · Delete: sil")
             if not (dx or dy):
                 return self.secim_ciz()
             kx, ky = self.ekran_vektoru(dx / z, dy / z)
@@ -2053,10 +2176,12 @@ class Uygulama:
         self.tuval.delete("uzerinde")
         if not self.mod and self.doc:  # bağlantının üstünde el imleci
             return self.tuval.config(cursor="hand2" if self.baglanti_bul(*self.nokta(e)) else "xterm")
-        if self.mod != "duzenle" or not self.doc or self.tasima or self.olcekleme:
+        if self.mod != "duzenle" or not self.doc or self.tasima or self.olcekleme or self.dondurme:
             return
         if not self.secim_var():  # sürekli görünümde farenin altındaki sayfanın satırları vurgulansın
             self.sayfayi_sec(self.nokta(e)[1])
+        if self.dondurmede_mi(self.nokta(e)):
+            return self.tuval.config(cursor="exchange")
         if self.tutamacta_mi(self.nokta(e)):
             return self.tuval.config(cursor="size_nw_se")
         s, p = self.doc[self.sayfa], self.pdf_noktasi(e)
@@ -2090,7 +2215,8 @@ class Uygulama:
 
     def surukle_(self, e):
         n = self.nokta(e)
-        if self.tasima or self.olcekleme:
+        self.shift_basili = bool(e.state & 0x1)
+        if self.tasima or self.olcekleme or self.dondurme:
             return self.tasi_surukle(n)
         if self.mod == "sec":
             return self.isaret_surukle(n)
@@ -2257,10 +2383,13 @@ class Uygulama:
             kutu = pi.oranli_kutu(kutu, *((boy, en) if s.rotation in (90, 270) else (en, boy)))
         sonuc = []
         if self.degisiklik(lambda: sonuc.append(pi.resim_ekle(s, kutu, veri=pi.png_baytlari(im)))):
-            self.mod_sec("duzenle")
+            if self.mod != "duzenle":  # mod_sec aç/kapa yapar: zaten açıksa kapatırdı
+                self.mod_sec("duzenle")
+            else:
+                self.secimi_birak()
             self.resmi_sec(sonuc[0], kutu)
-            self.bilgi("Resim eklendi. Sürükleyerek taşıyın, köşedeki kare ile büyütün/küçültün; "
-                       "çift tıklayınca arka planı temizlenir.")
+            self.bilgi("Resim eklendi. Sürükleyerek taşıyın, köşedeki kare ile büyütün/küçültün, üstteki yuvarlakla "
+                       "döndürün; çift tıklayınca arka planı temizlenir.")
 
     def imza_koy(self, s, x, y, kutu):
         """Kayıtlı imzayı tıklanan yere (ya da çizilen kutuya) koyar; kayıtlı imza yoksa önce çizdirir."""
