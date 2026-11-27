@@ -19,6 +19,7 @@ AYAR_KLASORU = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), 
 SON_YOLU = os.path.join(AYAR_KLASORU, "son_acilanlar.json")
 IMZA_YOLU = os.path.join(AYAR_KLASORU, "imza.png")
 KASE_KLASORU = os.path.join(AYAR_KLASORU, "kaseler")
+ACIK_YOLU = os.path.join(AYAR_KLASORU, "acik_belgeler.json")
 
 IPUCU = {"sec": "Seç: nota tıklayınca içeriği açılır. Şekli / kalem çizimini / oku sürükleyerek taşıyın; "
                 "tıklayıp Delete ile silin.",
@@ -51,6 +52,55 @@ def son_acilanlar():
             return [y for y in json.load(f) if os.path.exists(y)]
     except (OSError, ValueError):
         return []
+
+
+# ---------- aynı PDF iki pencerede açılmasın: açık belgeler listesi (pencereler arası) ----------
+def _anahtar(yol):
+    return os.path.normcase(os.path.abspath(yol))
+
+
+def _pencere_canli(pid, hwnd):
+    """Pencere hâlâ var ve o programa mı ait? (Çöken pencerenin kaydı kendiliğinden düşsün.)"""
+    import ctypes
+    u = ctypes.windll.user32
+    sahip = ctypes.c_ulong()
+    return bool(u.IsWindow(hwnd)) and u.GetWindowThreadProcessId(hwnd, ctypes.byref(sahip)) and sahip.value == pid
+
+
+def acik_belgeler():
+    """{dosya: [pid, pencere]} — yalnızca hâlâ açık pencereler."""
+    try:
+        with open(ACIK_YOLU, encoding="utf-8") as f:
+            return {k: v for k, v in json.load(f).items() if _pencere_canli(*v)}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def belge_kaydet(yol, pencere=0):
+    """Bu pencerenin açık belgesini kaydeder (yol None: bu pencerede belge yok / kapandı)."""
+    liste = {k: v for k, v in acik_belgeler().items() if v[0] != os.getpid()}
+    if yol:
+        liste[_anahtar(yol)] = [os.getpid(), pencere]
+    try:
+        os.makedirs(AYAR_KLASORU, exist_ok=True)
+        with open(ACIK_YOLU, "w", encoding="utf-8") as f:
+            json.dump(liste, f)
+    except OSError:
+        pass  # liste yazılamazsa en kötü ihtimalle aynı belge iki kez açılabilir
+
+
+def acik_pencere_bul(yol):
+    """Belge başka bir Polat PDF penceresinde açıksa o pencere; değilse None."""
+    v = acik_belgeler().get(_anahtar(yol))
+    return v[1] if v and v[0] != os.getpid() else None
+
+
+def one_getir(pencere):
+    import ctypes
+    u = ctypes.windll.user32
+    if u.IsIconic(pencere):
+        u.ShowWindow(pencere, 9)  # SW_RESTORE: simge durumundaysa geri aç
+    u.SetForegroundWindow(pencere)
 
 
 def son_acilana_ekle(yol):
@@ -106,7 +156,7 @@ class Uygulama:
                 tema.ayar_yaz(sonra_ac=None)
                 ilk_dosya = ilk_dosya if os.path.exists(ilk_dosya) else None
         if ilk_dosya:
-            self.pen.after(100, lambda: self.ac(ilk_dosya))
+            self.pen.after(100, lambda: self.ac(ilk_dosya, acilis=True))
         self.pen.after(1500, self.acilista_denetle)
 
     # ---------- arayüz ----------
@@ -784,11 +834,27 @@ class Uygulama:
             return False
         return self.farkli_kaydet() if c else True
 
-    def ac(self, yol=None):
-        if not self.kaydedilsin_mi():
+    def pencere_kimligi(self):
+        import ctypes
+        return ctypes.windll.user32.GetParent(self.pen.winfo_id())  # Tk çerçevesinin dış (Windows) penceresi
+
+    def ac(self, yol=None, acilis=False):
+        """acilis: program bu dosyayla başlatıldı (çift tıklama) — dosya başka pencerede açıksa bu pencere kapanır."""
+        soruldu = not yol  # Aç penceresinden önce kaydetme sorulur; yol verildiyse aynı-dosya denetiminden sonra
+        if soruldu and not self.kaydedilsin_mi():
             return
         yol = yol or filedialog.askopenfilename(filetypes=[("PDF", "*.pdf"), ("Tümü", "*.*")])
         if not yol:
+            return
+        if self.doc and self.yol and _anahtar(yol) == _anahtar(self.yol):
+            return self.bilgi("Bu belge zaten bu pencerede açık.")
+        baska = acik_pencere_bul(yol)
+        if baska:  # aynı dosyayı iki pencerede düzenlemek birinin değişikliklerini siler: açık olanı öne getir
+            one_getir(baska)
+            if acilis and not self.doc:
+                return self.pen.destroy()  # çift tıklamayla açılan boş pencereye gerek yok
+            return self.bilgi(f"{os.path.basename(yol)} başka bir Polat PDF penceresinde açık; o pencere öne getirildi.")
+        if not soruldu and not self.kaydedilsin_mi():
             return
         try:
             doc = pymupdf.open(yol)
@@ -806,6 +872,7 @@ class Uygulama:
         self.gecmis, self.ileri, self.bulunan = [], [], []
         self.secili_sayfalar, self.ustune_onayli = set(), False
         son_acilana_ekle(yol)
+        belge_kaydet(yol, self.pencere_kimligi())
         self.ciz()
         self.tuval.yview_moveto(0)
         self.kucukleri_ciz()
@@ -839,6 +906,7 @@ class Uygulama:
             self.gecmis, self.ileri = [], []
         self.yol, self.degisti, self.sifre = yol, False, yeni_sifre
         son_acilana_ekle(yol)
+        belge_kaydet(yol, self.pencere_kimligi())  # farklı kaydedildiyse açık belge artık bu dosya
         self.ciz()
         self.bilgi(f"Kaydedildi: {yol}")
         return True
@@ -2858,4 +2926,7 @@ if __name__ == "__main__":
         pi.test()
     else:
         guncelleme.eski_kurulumlari_sil()
-        Uygulama(next((a for a in sys.argv[1:] if not a.startswith("--")), None)).pen.mainloop()
+        try:
+            Uygulama(next((a for a in sys.argv[1:] if not a.startswith("--")), None)).pen.mainloop()
+        finally:
+            belge_kaydet(None)  # pencere kapandı: belgesi artık açık sayılmasın
